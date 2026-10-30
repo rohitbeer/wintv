@@ -177,6 +177,7 @@ function setFocus(r, c, quietly = false) {
   if (before && before !== el) before.classList.remove('focused');
   el.classList.add('focused');
   scrollRow(r);
+  panWall();
   if (before !== el || quietly) showShelf(current());
   if (!quietly && before !== el) tick();
 }
@@ -434,6 +435,7 @@ function focusMe(on) {
   if (on && !$('me').childElementCount) return false;
   meFocused = on;
   $('me').classList.toggle('focused', on);
+  panWall();
   currentTile()?.classList.toggle('focused', !on);
   tick();
   if (on) {
@@ -631,6 +633,7 @@ function useArt(a) {
   const before = walls[wallAt]?.url;
   walls = a?.wallpapers || [];
   document.body.classList.toggle('has-wall', walls.length > 0);
+  panWall();
   const keep = walls.findIndex((w) => w.url === before);
   if (keep >= 0) wallAt = keep;
   else if (walls.length) showWall(0);
@@ -673,6 +676,18 @@ async function showWall(i) {
   $('wall-blur').style.backgroundImage = `url("${blurred(img)}")`;
   const author = w.artist ? `Photo: ${w.artist}` : `Photo: author named on Commons, “${w.source}”`;
   $('lock-credit').textContent = [w.title, author, w.license, 'Wikimedia Commons'].filter(Boolean).join(' · ');
+}
+
+// Parallax: the picture moves a little against the focus, slower than the
+// tiles: up to 3.5% sideways from one end of a row to the other, and a
+// little up or down with the rows. Reduce motion keeps it still.
+function panWall() {
+  if (!walls.length) return;
+  const items = rows[pos.row] || [];
+  const along = items.length > 1 ? pos.col / (items.length - 1) : 0.5;
+  const x = look.still ? 0 : (0.5 - along) * 7;
+  const y = look.still ? 0 : meFocused ? 1.5 : -1.5 * pos.row;
+  $('wall-pan').style.transform = `scale(1.1) translate3d(${x.toFixed(2)}%, ${y.toFixed(2)}%, 0)`;
 }
 
 function startDrift() {
@@ -994,6 +1009,7 @@ function usePrefs(p) {
   const moved = JSON.stringify(p.weatherPlace ?? null) !== JSON.stringify(prefs.weatherPlace ?? null);
   prefs = p;
   applyLook(p);
+  panWall(); // reduce motion re-centres the picture
   $('lock').classList.toggle('dark', p.screenSaverStyle === 'dark');
   if (moved) refreshWeather();
 }
