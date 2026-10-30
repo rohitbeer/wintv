@@ -1,0 +1,24 @@
+{
+  "_comment": "Example site file for one household. Copy it OUTSIDE the repo (it holds your names and addresses), edit it, and point WINTV_SITE at it in vm/local.env. make-iso.sh installs it as C:\\ProgramData\\WinTV\\apps.json, merged over shell/apps.default.json (see its _comment). \"setup\" is used when building the answer file: Windows display language, regional format, keyboards (input locales), time zone and home location (GeoID). Edge can only be removed when the region is in the EEA (D-5); this example is Ireland.",
+  "setup": {
+    "uiLanguage": "en-US",
+    "locale": "en-IE",
+    "keyboards": "1809:00001809;0409:00000409",
+    "timeZone": "GMT Standard Time",
+    "geoId": 68
+  },
+  "profiles": [
+    { "id": "alex", "name": "Alex", "colors": ["#ff9f0a", "#5a2a00"] },
+    { "id": "sam", "name": "Sam", "colors": ["#30d158", "#0b3d1c"] },
+    { "id": "guest", "name": "Guest", "guest": true, "colors": ["#636366", "#1c1c1e"] }
+  ],
+  "addApps": [
+    {
+      "after": "youtube",
+      "id": "jellyfin", "name": "Jellyfin", "kind": "web", "glyph": "film",
+      "eyebrow": "Home server", "tagline": "Your own movies, shows and music.",
+      "url": "http://jellyfin.local:8096",
+      "colors": ["#a95ce0", "#0b6fb8"]
+    }
+  ]
+}

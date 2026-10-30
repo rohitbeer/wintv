@@ -1,0 +1,38 @@
+# Example Proxmox firewall for the WinTV test VM. Copy it outside the repo,
+# put in your own addresses, and point WINTV_FIREWALL at it (local.env).
+# A Windows install that browses arbitrary sites is the most exposed guest
+# on the host (D-11): nothing comes in, and of the home network it may only
+# reach the router's DNS and a media server. 192.0.2.0/24 is a placeholder
+# (the documentation range); use your own LAN.
+[OPTIONS]
+
+enable: 1
+dhcp: 1
+policy_in: DROP
+policy_out: DROP
+log_level_in: nolog
+log_level_out: nolog
+ndp: 0
+
+[RULES]
+
+# --- OUTBOUND ---------------------------------------------------------------
+OUT ACCEPT -dest 192.0.2.1 -p udp -dport 53
+OUT ACCEPT -dest 192.0.2.1 -p tcp -dport 53
+OUT ACCEPT -dest 192.0.2.10 -p tcp -dport 8096
+OUT DROP -dest 192.0.2.0/24
+OUT DROP -dest 10.0.0.0/8
+OUT DROP -dest 172.16.0.0/12
+OUT DROP -dest 192.168.0.0/16
+OUT DROP -dest 100.64.0.0/10
+OUT DROP -dest 169.254.0.0/16
+OUT DROP -p tcp -dport 25
+
+# Internet: Windows Update, streaming sites, browser updates.
+OUT ACCEPT -p tcp
+OUT ACCEPT -p udp
+OUT ACCEPT -p icmp
+
+# --- INBOUND ----------------------------------------------------------------
+# Nothing. The host talks to the VM through the QEMU guest agent
+# (virtio-serial), which is not a network path.

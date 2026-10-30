@@ -19,28 +19,33 @@ hidden repair mode for the admin.
 | path | what |
 |---|---|
 | `shell/` | the WinTV shell (Electron), in place of Explorer. `main.js` = windows, apps, power, sleep timer; `input.ps1` = the remote's Home/volume keys and the keyboard's typing; `system.ps1` = what Settings may change in Windows; `ui/index.html` = home screen, Settings, "Who's watching?", clock screen; `ui/layer.html` = the system layer over every app (quick settings, keyboard, volume); `apps.default.json` = apps, profiles, keys |
-| `sites/<household>.json` | a household's changes (profiles, extra tiles) merged over the defaults |
+| `sites/example.json` | example household site file: profiles, extra tiles, language and time zone. Your own copy stays outside the repo |
 | `payload/wintv/setup/` | what Windows runs during setup: `specialize.ps1`, `keep-apps.txt`, policies, first-logon and boot scripts |
-| `build/build-payload.sh` | builds the payload (build container) |
+| `build/build-payload.sh` | builds the payload (Linux, in the build container) |
 | `build/autounattend.xml.in` | the answer file template |
-| `vm/` | host scripts: `make-iso.sh`, `create-vm.sh`, `deploy-shell.sh`, `shot.sh`, `gx.sh`, firewall `222.fw` |
+| `vm/` | Proxmox host scripts: `make-iso.sh`, `create-vm.sh`, `deploy-shell.sh`, `shot.sh`, `gx.sh`; settings in `local.env` (`local.env.example`), test-VM firewall `firewall.example.fw` |
 | `docs/evidence/rea/` | raw REA output behind the feasibility study |
 
-## Build and test (on the Proxmox host)
+## Build and test (on a Proxmox host)
 
-Copy `vm/` to the Proxmox host and run the scripts there.
+The payload is built in a Linux container (Node.js, `gh`, `bsdtar`) and
+tested in a Windows VM. Copy `vm/` to the host, fill in `vm/local.env` from
+`local.env.example` (build container, admin-password file, your site file,
+test-VM firewall), then:
 
 ```
 vm/make-iso.sh vm          # payload + answer file -> local:iso/wintv-payload-vm.iso
-vm/create-vm.sh --fresh    # VM 222 wintv-test, unattended install
+vm/create-vm.sh --fresh    # test VM (ID 222 unless ID=...), unattended install
 vm/deploy-shell.sh         # fast loop: rebuild, copy the shell into the VM, restart
 vm/shot.sh /tmp/tv.png     # screenshot of the VM (doesn't disturb Windows' focus)
 echo 'sendkey ac_home 900' | qm monitor 222   # remote keys: ac_home (hold 900 ms), volumeup, ret, esc, arrows
 vm/gx.sh 'Get-Content C:\ProgramData\WinTV\setup.log'   # PowerShell inside the VM
 ```
 
-Admin password: in a private file kept by the builder. It is also inside
-the payload ISO's `autounattend.xml` (the ISO is mode 600).
+The admin password is generated into the file `WINTV_SECRET` names, and is
+also inside the payload ISO's `autounattend.xml` (the ISO is mode 600).
+Nothing personal belongs in the repo: names, addresses and passwords live in
+`local.env` and your site file, both outside git.
 
 ## Real PC (usb variant)
 

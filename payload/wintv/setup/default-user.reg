@@ -52,6 +52,3 @@ Windows Registry Editor Version 5.00
 [HKEY_USERS\WinTVDefault\Software\Microsoft\Windows\CurrentVersion\Run]
 "OneDriveSetup"=-
 
-; Home location an EEA country (matches the device region)
-[HKEY_USERS\WinTVDefault\Control Panel\International\Geo]
-"Nation"="94"

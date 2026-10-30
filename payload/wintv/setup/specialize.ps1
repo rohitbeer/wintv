@@ -26,6 +26,14 @@ Invoke-Step 'default user profile (every new account starts clean)' {
     Invoke-Native "$env:SystemRoot\System32\reg.exe" @('load', $hive, 'C:\Users\Default\NTUSER.DAT') | Out-Null
     try {
         Invoke-Native "$env:SystemRoot\System32\reg.exe" @('import', "$PSScriptRoot\default-user.reg") | Out-Null
+        # Home location (a GeoID), from the household's site file, to match the device region.
+        $siteFile = Join-Path $Payload 'config\apps.json'
+        $geo = if (Test-Path $siteFile) { (Get-Content $siteFile -Raw | ConvertFrom-Json).setup.geoId } else { $null }
+        if ($geo -is [int] -or $geo -is [long]) {
+            Invoke-Native "$env:SystemRoot\System32\reg.exe" @('add', "$hive\Control Panel\International\Geo",
+                '/v', 'Nation', '/t', 'REG_SZ', '/f', '/d', "$geo") | Out-Null
+            Write-Log "  home location: GeoID $geo"
+        }
         # First logon of each new account runs firstlogon.ps1; it only acts for tv.
         Invoke-Native "$env:SystemRoot\System32\reg.exe" @('add', "$hive\Software\Microsoft\Windows\CurrentVersion\RunOnce",
             '/v', 'WinTV', '/t', 'REG_SZ', '/f', '/d',

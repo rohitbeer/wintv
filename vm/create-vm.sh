@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # On the Proxmox host: create the disposable WinTV test VM and start the
-# unattended install. Firewall rules: /etc/pve/firewall/222.fw (see vm/222.fw).
-#   vm/create-vm.sh [--fresh]     --fresh destroys an existing VM 222 first
+# unattended install. Its firewall rules come from WINTV_FIREWALL (local.env;
+# see vm/firewall.example.fw).
+#   vm/create-vm.sh [--fresh]     --fresh destroys an existing test VM first
 set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+[ -f "$HERE/local.env" ] && . "$HERE/local.env"
 ID=${ID:-222}
 WINISO=${WINISO:-local:iso/win11-26h2-enterprise-eval-en-us.iso}
 PAYLOAD=${PAYLOAD:-local:iso/wintv-payload-vm.iso}
 FW=/etc/pve/firewall/$ID.fw
-RULES=${RULES:-$(dirname "$0")/222.fw}
+RULES=${WINTV_FIREWALL:?set WINTV_FIREWALL in local.env (see vm/firewall.example.fw)}
 
 # The VM must never boot without its fence. `qm destroy --purge` deletes
-# the firewall file too, so the rules come from the repo copy every time.
+# the firewall file too, so the rules are copied in again every time.
 [ -s "$RULES" ] || { echo "firewall rules $RULES missing; refusing to create VM $ID"; exit 1; }
 
 if qm status "$ID" >/dev/null 2>&1; then

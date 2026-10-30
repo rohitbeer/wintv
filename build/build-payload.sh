@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build the WinTV payload (everything except the answer file and its
 # password) into out/payload-<variant>/wintv. Runs in the dev container.
-#   build/build-payload.sh vm|usb        SITE=home by default
+#   build/build-payload.sh vm|usb
+# The household's site file is added later, on the host (vm/make-iso.sh).
 set -euo pipefail
 VARIANT=${1:?usage: build-payload.sh vm|usb}
-SITE=${SITE:-home}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$ROOT/out/payload-$VARIANT/wintv
 CACHE=$ROOT/out/cache
@@ -15,10 +15,9 @@ echo "== shell"
 (cd "$ROOT/shell" && npm ci --no-audit --no-fund --loglevel=error && node build.mjs)
 cp -r "$ROOT/shell/dist/WinTV-win32-x64" "$OUT/shell"
 
-echo "== setup scripts, site '$SITE'"
+echo "== setup scripts"
 cp -r "$ROOT/payload/wintv/setup" "$OUT/setup"
 mkdir -p "$OUT/art" && cp "$ROOT/payload/wintv/art/lockscreen.jpg" "$OUT/art/"
-if [ -f "$ROOT/sites/$SITE.json" ]; then cp "$ROOT/sites/$SITE.json" "$OUT/config/apps.json"; fi
 
 echo "== browser: Brave (latest release, hash checked against GitHub)"
 tag=$(gh api repos/brave/brave-browser/releases/latest --jq .tag_name)
@@ -59,7 +58,6 @@ cat > "$OUT/build.json" <<JSON
 {
   "version": "$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo dev)",
   "variant": "$VARIANT",
-  "site": "$SITE",
   "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "browser": "brave $tag",
   "browserSigner": "Brave Software"
