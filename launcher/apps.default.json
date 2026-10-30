@@ -44,6 +44,7 @@
       "eyebrow": "Watch",
       "tagline": "The couch version of YouTube, with ads blocked by the browser.",
       "url": "https://www.youtube.com/tv",
+      "drm": true,
       "userAgent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1",
       "colors": [
         "#ff3b30",

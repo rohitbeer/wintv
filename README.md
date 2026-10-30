@@ -9,6 +9,7 @@ Settings included.
 - Why each choice was made: `decision.md`
 - The concepts, explained: `docs/EXPLANATIONS.md`
 - Why not on the TV's own Android chip: `docs/feasibility-android-tv.md`
+- What other TV systems offer, and WinTV's roadmap: `docs/tv-os-parity.md` (D-21)
 - `WTV-n` numbers in the docs are tickets in the project's tracker.
 
 ## Layout
