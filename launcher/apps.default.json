@@ -1,0 +1,145 @@
+{
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; power = power menu.",
+  "browserCandidates": [
+    "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
+    "%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe"
+  ],
+  "homeKeys": [
+    "BrowserHome",
+    "Control+Escape",
+    "Super+Escape",
+    "Control+Alt+H"
+  ],
+  "profiles": [
+    {
+      "id": "home",
+      "name": "Home",
+      "colors": [
+        "#5e5ce6",
+        "#1c1c40"
+      ]
+    },
+    {
+      "id": "guest",
+      "name": "Guest",
+      "guest": true,
+      "colors": [
+        "#636366",
+        "#1c1c1e"
+      ]
+    }
+  ],
+  "apps": [
+    {
+      "id": "youtube",
+      "name": "YouTube",
+      "kind": "web",
+      "glyph": "play",
+      "eyebrow": "Watch",
+      "tagline": "The couch version of YouTube, with ads blocked by the browser.",
+      "url": "https://www.youtube.com/tv",
+      "userAgent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1",
+      "colors": [
+        "#ff3b30",
+        "#5a0a12"
+      ]
+    },
+    {
+      "id": "netflix",
+      "name": "Netflix",
+      "kind": "web",
+      "glyph": "tv",
+      "eyebrow": "Stream",
+      "tagline": "Browser playback: Netflix caps Chromium browsers at 720p.",
+      "url": "https://www.netflix.com/browse",
+      "colors": [
+        "#e50914",
+        "#2b0a0c"
+      ]
+    },
+    {
+      "id": "prime",
+      "name": "Prime Video",
+      "kind": "web",
+      "glyph": "tv",
+      "eyebrow": "Stream",
+      "tagline": "Movies and series from Amazon.",
+      "url": "https://www.primevideo.com",
+      "colors": [
+        "#1aa3e8",
+        "#0b1f33"
+      ]
+    },
+    {
+      "id": "disney",
+      "name": "Disney+",
+      "kind": "web",
+      "glyph": "star",
+      "eyebrow": "Stream",
+      "tagline": "Disney, Pixar, Marvel, Star Wars.",
+      "url": "https://www.disneyplus.com",
+      "colors": [
+        "#2f5bff",
+        "#08103a"
+      ]
+    },
+    {
+      "id": "browser",
+      "name": "Browser",
+      "kind": "browser",
+      "glyph": "globe",
+      "eyebrow": "Web",
+      "tagline": "A full browser window. Press Home to come back.",
+      "url": "https://search.brave.com",
+      "colors": [
+        "#ff7a3d",
+        "#3a1450"
+      ]
+    },
+    {
+      "id": "steam",
+      "name": "Steam",
+      "kind": "uri",
+      "glyph": "gamepad",
+      "eyebrow": "Play",
+      "tagline": "Big Picture mode, made for a controller.",
+      "uri": "steam://open/bigpicture",
+      "requires": "%ProgramFiles(x86)%\\Steam\\steam.exe",
+      "hideWhenMissing": true,
+      "colors": [
+        "#1b9cff",
+        "#0b1424"
+      ]
+    }
+  ],
+  "system": [
+    {
+      "id": "settings",
+      "name": "Settings",
+      "kind": "uri",
+      "glyph": "gear",
+      "eyebrow": "System",
+      "tagline": "Wi-Fi, display, sound and Bluetooth remotes.",
+      "uri": "ms-settings:",
+      "colors": [
+        "#8e8e93",
+        "#1c1c22"
+      ]
+    },
+    {
+      "id": "power",
+      "name": "Power",
+      "kind": "power",
+      "glyph": "power",
+      "eyebrow": "System",
+      "tagline": "Sleep, restart, shut down or switch to the admin account.",
+      "colors": [
+        "#5e5ce6",
+        "#141433"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Links and web pages open in Brave for every new account. -->
+<DefaultAssociations>
+  <Association Identifier=".htm" ProgId="BraveHTML" ApplicationName="Brave" />
+  <Association Identifier=".html" ProgId="BraveHTML" ApplicationName="Brave" />
+  <Association Identifier="http" ProgId="BraveHTML" ApplicationName="Brave" />
+  <Association Identifier="https" ProgId="BraveHTML" ApplicationName="Brave" />
+</DefaultAssociations>

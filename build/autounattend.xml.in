@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WinTV answer file, variant @@VARIANT@@. Rendered by vm/make-iso.sh.
+  Windows Setup finds it at the root of any attached drive.
+  vm:  wipes disk 0 without asking (test VM only).
+  usb: asks which disk to install to, so it never wipes the wrong one.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>1809:00001809;0409:00000409</InputLocale>
+      <SystemLocale>en-IE</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-IE</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+@@DISKCONFIG@@
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add"><Key>/IMAGE/NAME</Key><Value>@@IMAGE@@</Value></MetaData>
+          </InstallFrom>
+@@INSTALLTO@@
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+@@PRODUCTKEY@@
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>WinTV: copy the payload from the install media</Description>
+          <Path>cmd.exe /c "for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %d:\wintv\setup\specialize.ps1 (robocopy %d:\wintv C:\ProgramData\WinTV\payload /E /R:1 /W:1 /NFL /NDL /NJH /NJS &amp; exit /b 0)"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Description>WinTV: turn Windows into the TV appliance</Description>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\WinTV\payload\setup\specialize.ps1</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>@@COMPUTERNAME@@</ComputerName>
+      <TimeZone>GMT Standard Time</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>1809:00001809;0409:00000409</InputLocale>
+      <SystemLocale>en-IE</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-IE</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>admin</Name>
+            <DisplayName>Admin</DisplayName>
+            <Group>Administrators</Group>
+            <Password><Value>@@ADMINPASSWORD@@</Value><PlainText>true</PlainText></Password>
+          </LocalAccount>
+          <LocalAccount wcm:action="add">
+            <Name>tv</Name>
+            <DisplayName>TV</DisplayName>
+            <Group>Users</Group>
+            <Password><Value></Value><PlainText>true</PlainText></Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>tv</Username>
+        <Password><Value></Value><PlainText>true</PlainText></Password>
+        <LogonCount>1</LogonCount>
+      </AutoLogon>
+    </component>
+  </settings>
+</unattend>

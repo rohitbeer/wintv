@@ -1,0 +1,34 @@
+# Inbox apps that survive setup. Everything else that Windows provisions is
+# removed, so a new release's new bloat is gone without anyone listing it.
+# One regex per line, matched against the package DisplayName.
+
+# Frameworks other apps are built on (removing them breaks those apps)
+^Microsoft\.VCLibs
+^Microsoft\.UI\.Xaml
+^Microsoft\.NET\.Native
+^Microsoft\.WindowsAppRuntime
+^Microsoft\.Services\.Store\.Engagement$
+
+# winget, used by the admin to add apps without the Store
+^Microsoft\.DesktopAppInstaller$
+^Microsoft\.Winget\.
+
+# Windows Security (antivirus/firewall UI). Security stays.
+^Microsoft\.SecHealthUI$
+
+# Codecs. A TV that cannot decode HEVC/AV1/VP9 is not a TV.
+^Microsoft\.WebMediaExtensions$
+^Microsoft\.VP9VideoExtensions$
+^Microsoft\.AV1VideoExtension$
+^Microsoft\.HEVCVideoExtension$
+^Microsoft\.MPEG2VideoExtension$
+^Microsoft\.AVCEncoderVideoExtension$
+^Microsoft\.DolbyAudioExtensions$
+^Microsoft\.HEIFImageExtension$
+^Microsoft\.WebpImageExtension$
+^Microsoft\.RawImageExtension$
+
+# Admin tools for the maintenance account
+^Microsoft\.WindowsNotepad$
+^Microsoft\.WindowsTerminal$
+^Microsoft\.ApplicationCompatibilityEnhancements$

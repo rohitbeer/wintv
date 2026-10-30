@@ -1,0 +1,112 @@
+Windows Registry Editor Version 5.00
+
+; WinTV machine policies. Each block says what it turns off and why.
+
+; Microsoft "consumer experiences": suggested apps, tips, Spotlight ads
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\CloudContent]
+"DisableWindowsConsumerFeatures"=dword:00000001
+"DisableConsumerAccountStateContent"=dword:00000001
+"DisableCloudOptimizedContent"=dword:00000001
+"DisableSoftLanding"=dword:00000001
+
+; Telemetry at the lowest level the edition allows (Pro treats 0 as 1)
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\DataCollection]
+"AllowTelemetry"=dword:00000000
+"DoNotShowFeedbackNotifications"=dword:00000001
+"AllowDeviceNameInTelemetry"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo]
+"DisabledByGroupPolicy"=dword:00000001
+
+; Copilot, Recall, Widgets
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableAIDataAnalysis"=dword:00000001
+"AllowRecallEnablement"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Dsh]
+"AllowNewsAndInterests"=dword:00000000
+
+; Search: no Bing, no Cortana
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Windows Search]
+"AllowCortana"=dword:00000000
+"DisableWebSearch"=dword:00000001
+"ConnectedSearchUseWeb"=dword:00000000
+
+; Activity history
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\System]
+"EnableActivityFeed"=dword:00000000
+"PublishUserActivities"=dword:00000000
+"UploadUserActivities"=dword:00000000
+; Plain background on the Windows sign-in screen (only the admin sees it)
+"DisableLogonBackgroundImage"=dword:00000001
+"DisableAcrylicBackgroundOnLogon"=dword:00000001
+
+; Teams/Chat auto-install
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications]
+"ConfigureChatAutoInstall"=dword:00000000
+
+; OneDrive off for everyone
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\OneDrive]
+"DisableFileSyncNGSC"=dword:00000001
+
+; Game Bar recording
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\GameDVR]
+"AllowGameDVR"=dword:00000000
+
+; Updates: download from Microsoft only (no peer-to-peer), and never reboot
+; the TV by itself while someone is signed in (i.e. during a film)
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization]
+"DODownloadMode"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU]
+"NoAutoRebootWithLoggedOnUsers"=dword:00000001
+
+; Privacy questions at setup
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\OOBE]
+"DisablePrivacyExperience"=dword:00000001
+
+; A TV boots to a picture, not to "Welcome" and "Please wait"
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System]
+"EnableFirstLogonAnimation"=dword:00000000
+"DisableStatusMessages"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Personalization]
+"NoLockScreen"=dword:00000001
+
+; Edge stays gone: Edge Update may not install the browser again.
+; WebView2 (the shared runtime other apps embed) is still allowed.
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\EdgeUpdate]
+"Install{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}"=dword:00000000
+"Install{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"=dword:00000001
+"CreateDesktopShortcutDefault"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\EdgeUpdate]
+"DoNotUpdateToEdgeWithChromium"=dword:00000001
+
+; Brave as a TV browser: no wallet/rewards/VPN/AI/Tor/news upsells, no
+; usage pings, and it exits when its window closes so the launcher sees it.
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\BraveSoftware\Brave]
+"BraveRewardsDisabled"=dword:00000001
+"BraveWalletDisabled"=dword:00000001
+"BraveVPNDisabled"=dword:00000001
+"BraveAIChatEnabled"=dword:00000000
+"TorDisabled"=dword:00000001
+"BraveNewsDisabled"=dword:00000001
+"BraveTalkDisabled"=dword:00000001
+"BraveP3AEnabled"=dword:00000000
+"BraveStatsPingEnabled"=dword:00000000
+"BraveWebDiscoveryEnabled"=dword:00000000
+"MetricsReportingEnabled"=dword:00000000
+"DefaultBrowserSettingEnabled"=dword:00000000
+"PromotionalTabsEnabled"=dword:00000000
+"BackgroundModeEnabled"=dword:00000000
+
+; Same for Chrome, if a build uses Chrome instead
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome]
+"MetricsReportingEnabled"=dword:00000000
+"DefaultBrowserSettingEnabled"=dword:00000000
+"PromotionalTabsEnabled"=dword:00000000
+"BackgroundModeEnabled"=dword:00000000

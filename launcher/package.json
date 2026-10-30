@@ -1,0 +1,16 @@
+{
+  "name": "wintv-launcher",
+  "productName": "WinTV",
+  "version": "0.1.0",
+  "description": "10-foot home screen that replaces Explorer as the shell of the WinTV user",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "build:win": "node build.mjs"
+  },
+  "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "@electron/packager": "20.3.0",
+    "electron": "45.1.0"
+  }
+}

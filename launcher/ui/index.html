@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+  <title>WinTV</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="shelf" aria-hidden="true">
+    <div class="art" id="art-a"></div>
+    <div class="art" id="art-b"></div>
+    <div class="shade"></div>
+  </div>
+
+  <header>
+    <div id="me"></div>
+    <div id="clock"></div>
+  </header>
+
+  <section id="info" aria-live="polite">
+    <div id="eyebrow"></div>
+    <h1 id="title"></h1>
+    <p id="tagline"></p>
+  </section>
+
+  <main id="rows"></main>
+
+  <div id="sheet" class="hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <h2 id="sheet-title"></h2>
+      <div id="sheet-items"></div>
+    </div>
+  </div>
+
+  <div id="picker" class="hidden" role="dialog" aria-modal="true">
+    <div class="who">Who’s watching?</div>
+    <div id="faces"></div>
+    <div class="who-hint">Each profile keeps its own app sign-ins.</div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
