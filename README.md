@@ -4,15 +4,9 @@ A TV edition of Windows 11. Plug a PC into the TV, install from a USB
 stick, and it boots straight to a "Who's watching?" screen, then an
 Apple-TV-style home screen. It has no Microsoft bloat and no Edge, and uses
 Brave as the browser. WinTV's own shell replaces every Windows screen the TV
-account would see (D-22). Over every app it adds quick settings, an
+account would see. Over every app it adds quick settings, an
 on-screen keyboard and the volume. The Windows desktop exists only in a
 hidden repair mode for the admin.
-
-- Why each choice was made: `decision.md`
-- The concepts, explained: `docs/EXPLANATIONS.md`
-- Why not on the TV's own Android chip: `docs/feasibility-android-tv.md`
-- What other TV systems offer, and WinTV's roadmap: `docs/tv-os-parity.md` (D-21)
-- `WTV-n` numbers in the docs are tickets in the project's tracker.
 
 ## Layout
 
@@ -24,7 +18,6 @@ hidden repair mode for the admin.
 | `build/build-payload.sh` | builds the payload (Linux, in the build container) |
 | `build/autounattend.xml.in` | the answer file template |
 | `vm/` | Proxmox host scripts: `make-iso.sh`, `create-vm.sh`, `deploy-shell.sh`, `shot.sh`, `gx.sh`; settings in `local.env` (`local.env.example`), test-VM firewall `firewall.example.fw` |
-| `docs/evidence/rea/` | raw REA output behind the feasibility study |
 
 ## Build and test (on a Proxmox host)
 
@@ -50,7 +43,7 @@ Nothing personal belongs in the repo: names, addresses and passwords live in
 ## Installing on a PC (usb variant)
 
 WinTV is a folder and an answer file that sit next to Microsoft's own,
-unmodified Windows 11 installer (D-2). The disk you pick is erased.
+unmodified Windows 11 installer. The disk you pick is erased.
 
 1. Download the Windows 11 ISO from Microsoft and write it to a USB stick
    (Rufus on Windows: turn off its own "customize Windows" options, WinTV's
@@ -67,11 +60,11 @@ unmodified Windows 11 installer (D-2). The disk you pick is erased.
 
 The stick holds the admin password in `autounattend.xml`; Windows deletes it
 from the installed system. Wipe the stick or keep it safe. This path is not
-hardware-tested yet (WTV-15).
+hardware-tested yet.
 
 ## Updates
 
-Settings > Updates shows both kinds (D-27, D-28):
+Settings > Updates shows both kinds:
 
 - **Windows:** check and "Install now", as a SYSTEM task the TV may only
   start. Windows installs the same updates by itself anyway.
@@ -102,7 +95,7 @@ release `vX.Y.Z`).
 
 ## After installing
 
-Edge's uninstaller only accepts Settings, not a script (D-17). Once, as
+Edge's uninstaller only accepts Settings, not a script. Once, as
 admin: Settings > About > Repair mode (press OK seven times on "WinTV" to
 show it), sign in as admin, then **Settings > Apps > Installed apps >
 Microsoft Edge > Uninstall**. Then sign out and choose **TV**.

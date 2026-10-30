@@ -30,6 +30,6 @@ ls -la "$OUT"
 if [ "${1:-}" = --publish ]; then
   pct exec "$CT" -- mkdir -p "/tmp/wintv-release-$VERSION"
   for f in "$OUT"/*; do pct push "$CT" "$f" "/tmp/wintv-release-$VERSION/$(basename "$f")"; done
-  pct exec "$CT" -- bash -lc "cd $REPO && gh release create v$VERSION --repo $GH_REPO --title 'WinTV $VERSION' --notes 'See decision.md for what changed.' /tmp/wintv-release-$VERSION/*"
+  pct exec "$CT" -- bash -lc "cd $REPO && gh release create v$VERSION --repo $GH_REPO --title 'WinTV $VERSION' --notes 'See the commit log for what changed.' /tmp/wintv-release-$VERSION/*"
   pct exec "$CT" -- rm -rf "/tmp/wintv-release-$VERSION"
 fi

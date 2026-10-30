@@ -6,3 +6,6 @@ vm/local.env
 vm/local.fw
 sites/*
 !sites/example.json
+# The decision log and research notes are kept privately, outside the public repo.
+/decision.md
+/docs/
