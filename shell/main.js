@@ -1,0 +1,853 @@
+'use strict';
+// WinTV shell, main process. On the TV this exe *is* the shell of the `tv`
+// account (HKCU\...\Winlogon\Shell), in place of Explorer: everything the
+// person on the couch sees is drawn by it (D-22). Two windows:
+//   home   the full-screen home screen, Settings, "Who's watching?", the clock screen
+//   layer  the system layer, always on top of every app and never focused:
+//          quick settings, the keyboard, volume, the sleep-timer warning
+// It must never quit on its own, must survive its own crashes, and is the
+// only way to start anything.
+
+const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen } = require('electron');
+const { spawn, execFile } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+
+const IS_WIN = process.platform === 'win32';
+// Admin-owned config (C:\ProgramData\WinTV, read-only for the tv user).
+const SYSTEM_DIR = IS_WIN
+  ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'WinTV')
+  : path.join(os.homedir(), '.wintv');
+
+let win = null;
+let quitting = false;
+let config = null;
+let profile = null;        // active WinTV profile (the TV's own sign-in, not a Windows account)
+const running = new Map(); // app id -> { pid, dir } (dir: the app's browser profile, for web apps)
+
+// ---------------------------------------------------------------- logging
+function logFile() {
+  return path.join(app.getPath('userData'), 'shell.log');
+}
+function log(...parts) {
+  const line = `${new Date().toISOString()} ${parts.join(' ')}\n`;
+  try { fs.appendFileSync(logFile(), line); } catch { /* log dir not ready */ }
+  if (!app.isPackaged) process.stdout.write(line);
+}
+
+// ---------------------------------------------------------------- config
+// %VAR% expands from the environment; ${PROFILES} is this user's per-app
+// browser profile folder, so every streaming app keeps its own login.
+function expand(s) {
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/%([^%]+)%/g, (m, name) => process.env[name] ?? m)
+    .replace(/\$\{PROFILES\}/g, path.join(app.getPath('userData'), 'profiles'));
+}
+
+function loadConfig() {
+  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'apps.default.json'), 'utf8'));
+  // Site file: any top-level key replaces the shipped one; addApps/removeApps
+  // edit the shipped list so a household only writes down what differs.
+  const sitePath = path.join(SYSTEM_DIR, 'apps.json');
+  try {
+    const site = JSON.parse(fs.readFileSync(sitePath, 'utf8'));
+    const { addApps = [], removeApps = [], ...replace } = site;
+    Object.assign(cfg, replace);
+    cfg.apps = cfg.apps.filter((a) => !removeApps.includes(a.id));
+    for (const { after, ...extra } of addApps) {
+      const at = cfg.apps.findIndex((a) => a.id === after);
+      cfg.apps.splice(at < 0 ? cfg.apps.length : at + 1, 0, extra);
+    }
+    log('config:', sitePath);
+  } catch (e) {
+    if (e.code !== 'ENOENT') log('config: ignoring broken', sitePath, e.message);
+  }
+  const browser = (cfg.browserCandidates || []).map(expand).find((p) => fs.existsSync(p)) || null;
+  const items = (list, row) => (list || []).map((a) => ({ ...a, row }));
+  const profiles = (cfg.profiles && cfg.profiles.length ? cfg.profiles : [{ id: 'home', name: 'Home' }])
+    .filter((p) => /^[a-z0-9-]+$/.test(p.id));
+  return {
+    browser,
+    profiles,
+    homeKeys: cfg.homeKeys || [],
+    quickKeys: cfg.quickKeys || [],
+    lockScreen: { afterMinutes: 5, askWhoAfterMinutes: 30, ...(cfg.lockScreen || {}) },
+    keyboard: { autoOpen: true, layout: 'auto', ...(cfg.keyboard || {}) },
+    apps: items(cfg.apps, 0),
+    system: items(cfg.system, 1),
+  };
+}
+
+function resolve(a) {
+  const needs = a.requires ? expand(a.requires) : null;
+  let available = true;
+  let reason = '';
+  if (needs && !fs.existsSync(needs)) { available = false; reason = `${a.name} is not installed`; }
+  if ((a.kind === 'web' || a.kind === 'browser') && !config.browser) { available = false; reason = 'No browser installed'; }
+  return { ...a, available, reason };
+}
+
+function visible(list) {
+  return list.map(resolve).filter((a) => a.available || !a.hideWhenMissing);
+}
+
+function findItem(id) {
+  const a = [...config.apps, ...config.system].find((x) => x.id === id);
+  return a ? resolve(a) : null;
+}
+
+// ---------------------------------------------------------------- launching
+function publicState() {
+  const strip = ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row }) =>
+    ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row });
+  return {
+    apps: visible(config.apps).map(strip),
+    system: visible(config.system).map(strip),
+    running: [...running.keys()],
+    profiles: config.profiles.map(({ id, name, colors, guest }) => ({ id, name, colors, guest: !!guest })),
+    profile: profile?.id ?? null,
+    browser: config.browser ? path.basename(config.browser, '.exe') : null,
+    user: os.userInfo().username,
+    version: app.getVersion(),
+    lockScreen: config.lockScreen,
+  };
+}
+
+function pushState() {
+  if (win && !win.isDestroyed()) win.webContents.send('state', { running: [...running.keys()] });
+}
+
+function profileDir(item) {
+  const who = profile || config.profiles[0];
+  return path.join(expand('${PROFILES}'), who.id, item.id);
+}
+
+// Brave ships with Widevine, the DRM that Netflix, Prime Video and Disney+
+// need, switched off until the user accepts a prompt, which is awkward with a
+// remote. Tiles marked "drm" accept in advance: they set Brave's own switch,
+// brave.widevine_opted_in in the profile's Local State, before Brave starts.
+// Other tiles (YouTube, the browser) keep Brave's default.
+function optInWidevine(dir) {
+  if (path.basename(config.browser || '').toLowerCase() !== 'brave.exe') return;
+  const file = path.join(dir, 'Local State');
+  let state = {};
+  try {
+    state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') { log('widevine: cannot read', file, e.message); return; }
+  }
+  if (state.brave?.widevine_opted_in === true) return;
+  state.brave = { ...(state.brave || {}), widevine_opted_in: true };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(state));
+  log('widevine: opted in for', dir);
+}
+
+function browserArgs(item) {
+  const who = profile || config.profiles[0];
+  const dir = profileDir(item);
+  const args = [
+    `--user-data-dir=${dir}`,
+    '--start-fullscreen',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--autoplay-policy=no-user-gesture-required',
+  ];
+  // A quit app is closed hard (taskkill), and Brave would greet the next
+  // start with "Restore pages?". A TV just opens the app again.
+  args.push('--hide-crash-restore-bubble');
+  // Show the page's text fields to UI Automation, so the keyboard comes up
+  // when one gets the focus. Brave only does this for screen readers by
+  // default; "basic" is the light level (no screen-reader extras).
+  if (config.keyboard.autoOpen) args.push('--force-renderer-accessibility=basic');
+  if (who.guest) args.push('--incognito'); // guests leave nothing behind
+  if (item.userAgent) args.push(`--user-agent=${item.userAgent}`);
+  if (item.kind === 'web') args.push(`--app=${item.url}`);
+  else if (item.url) args.push(item.url);
+  return args;
+}
+
+// ---------------------------------------------------------------- PowerShell helpers
+// The shell reaches into Windows through two long-lived PowerShell processes
+// running as this (standard) user: system.ps1 (settings) and input.ps1 (the
+// remote's keys). The scripts live inside app.asar, where PowerShell can't
+// read them, so each is sent as the first line of its stdin to a two-line
+// loader; JSON lines follow both ways. (Passing the script on the command
+// line, as before, hits Windows' 32,767-character limit.)
+const PS_LOADER = '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); '
+  + 'Invoke-Expression ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine())))';
+
+function startPs(name, onMessage, onExit) {
+  const script = fs.readFileSync(path.join(__dirname, name), 'utf8');
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-EncodedCommand', Buffer.from(PS_LOADER, 'utf16le').toString('base64')],
+  { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  child.stdin.write(Buffer.from(script, 'utf8').toString('base64') + '\n');
+  let buf = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { log(`${name}: bad line`, line.slice(0, 200)); continue; }
+      onMessage(msg);
+    }
+  });
+  child.stderr.on('data', (d) => log(`${name}:`, String(d).trim().slice(0, 500)));
+  child.once('error', (e) => log(`${name}: cannot start:`, e.message));
+  child.once('exit', (code) => { log(`${name} exited`, String(code)); onExit(child); });
+  return child;
+}
+
+// ---------------------------------------------------------------- system helper
+// The Settings screens and the system layer change Windows through
+// system.ps1. Only the ops below exist, and their arguments are checked here
+// before they reach Windows.
+let helper = null;
+let helperSeq = 0;
+const helperWaiting = new Map(); // request id -> resolve
+
+function int(v, min, max) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error('bad argument');
+  return n;
+}
+
+const SYSTEM_OPS = {
+  'display.get': () => ({}),
+  'display.set': (a) => ({ width: int(a.width, 640, 15360), height: int(a.height, 480, 8640), hz: int(a.hz, 20, 1000) }),
+  'audio.get': () => ({}),
+  'audio.set': (a) => (a.volume !== undefined ? { volume: int(a.volume, 0, 100) } : { muted: a.muted === true }),
+  'audio.key': (a) => { if (!['up', 'down', 'mute'].includes(a.key)) throw new Error('bad argument'); return { key: a.key }; },
+  'network.get': () => ({}),
+  about: () => ({}),
+  'process.find': (a) => {
+    const root = expand('${PROFILES}') + path.sep;
+    if (typeof a.dir !== 'string' || !a.dir.startsWith(root) || /["\r\n]/.test(a.dir)) throw new Error('bad argument');
+    return { dir: a.dir };
+  },
+};
+
+function stopHelper(reason) {
+  if (!helper) return;
+  log('helper stopped:', reason);
+  helper.kill();
+  helper = null;
+}
+
+function startHelper() {
+  return startPs('system.ps1', (msg) => {
+    helperWaiting.get(msg.id)?.(msg);
+    helperWaiting.delete(msg.id);
+  }, (child) => {
+    if (helper === child) helper = null;
+    for (const done of helperWaiting.values()) done({ ok: false, error: 'helper exited' });
+    helperWaiting.clear();
+  });
+}
+
+async function system(op, args) {
+  const check = SYSTEM_OPS[op];
+  if (!check) return { ok: false, error: 'Unknown setting' };
+  let clean;
+  try { clean = check(args || {}); } catch (e) { return { ok: false, error: e.message }; }
+  if (!IS_WIN) return { ok: false, error: 'Settings need Windows' };
+  helper ||= startHelper();
+  const id = ++helperSeq;
+  return new Promise((done) => {
+    const timer = setTimeout(() => {
+      helperWaiting.delete(id);
+      stopHelper(`${op} timed out`); // a stuck helper would block every later request
+      done({ ok: false, error: 'Windows did not answer' });
+    }, 20000);
+    helperWaiting.set(id, (msg) => { clearTimeout(timer); done(msg); });
+    helper.stdin.write(JSON.stringify({ id, op, ...clean }) + '\n');
+  });
+}
+
+function quiet(file, args) {
+  return new Promise((resolve) => {
+    execFile(file, args, { windowsHide: true }, (err, stdout) => resolve({ err, stdout }));
+  });
+}
+
+// A launched app that is still running gets raised instead of started twice.
+async function raise(pid) {
+  if (!IS_WIN) return;
+  await quiet('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `(New-Object -ComObject WScript.Shell).AppActivate(${Number(pid)}) | Out-Null`]);
+}
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+// The process we started has exited. That doesn't always mean the app has
+// closed: Brave restarts itself once after a background update, handing its
+// window to a new process (seen on the VM: the Browser tile "exited" with 0
+// after two seconds and the home screen jumped over it). For browser apps
+// the profile folder identifies the app, so a browser still running with it
+// *is* the app, and the shell follows that process instead.
+async function appGone(id, pid) {
+  const entry = running.get(id);
+  if (!entry || entry.pid !== pid) return;
+  if (entry.dir) {
+    const r = await system('process.find', { dir: entry.dir });
+    const next = r.ok ? r.result.pids?.[0] : null;
+    if (next && running.get(id) === entry) {
+      log('app', id, 'continues in process', String(next));
+      entry.pid = next;
+      const watch = setInterval(() => {
+        if (pidAlive(next)) return;
+        clearInterval(watch);
+        appGone(id, next);
+      }, 1500);
+      return;
+    }
+  }
+  running.delete(id);
+  pushState();
+  goHome('app-exit');
+}
+
+async function launch(id) {
+  const item = findItem(id);
+  if (!item) return { ok: false, error: 'Unknown app' };
+  if (!item.available) return { ok: false, error: item.reason };
+  log('launch', id);
+
+  const alive = running.get(id);
+  if (alive) { await raise(alive.pid); return { ok: true, raised: true }; }
+
+  if (item.kind === 'uri') {
+    try { await shell.openExternal(item.uri); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  let file;
+  let args;
+  let dir = null;
+  if (item.kind === 'web' || item.kind === 'browser') {
+    dir = profileDir(item);
+    file = config.browser;
+    args = browserArgs(item);
+    if (item.drm) {
+      try { optInWidevine(profileDir(item)); } catch (e) { log('widevine:', e.message); }
+    }
+  }
+  else if (item.kind === 'exe') { file = expand(item.path); args = (item.args || []).map(expand); }
+  else return { ok: false, error: `Cannot launch kind ${item.kind}` };
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(file, args, { detached: true, stdio: 'ignore' });
+    } catch (e) {
+      resolve({ ok: false, error: e.message });
+      return;
+    }
+    child.once('error', (e) => { log('launch error', id, e.message); running.delete(id); pushState(); resolve({ ok: false, error: e.message }); });
+    child.once('spawn', () => { running.set(id, { pid: child.pid, dir }); pushState(); resolve({ ok: true }); });
+    child.once('exit', (code) => {
+      log('exit', id, String(code));
+      appGone(id, child.pid);
+    });
+    child.unref();
+  });
+}
+
+async function quitApp(id) {
+  const entry = running.get(id);
+  if (!entry) return { ok: true };
+  log('quit', id);
+  if (IS_WIN) await quiet('taskkill.exe', ['/PID', String(entry.pid), '/T', '/F']);
+  else try { process.kill(entry.pid); } catch { /* already gone */ }
+  return { ok: true };
+}
+
+// Changing who is watching closes everything the previous person had open.
+async function setProfile(id) {
+  const next = config.profiles.find((p) => p.id === id);
+  if (!next) return { ok: false, error: 'Unknown profile' };
+  if (profile && profile.id !== next.id) {
+    for (const appId of [...running.keys()]) await quitApp(appId);
+  }
+  profile = next;
+  log('profile', next.id);
+  return { ok: true };
+}
+
+const POWER = {
+  sleep: ['rundll32.exe', ['powrprof.dll,SetSuspendState', '0,1,0']],
+  restart: ['shutdown.exe', ['/r', '/t', '0']],
+  shutdown: ['shutdown.exe', ['/s', '/t', '0']],
+  'switch-user': ['rundll32.exe', ['user32.dll,LockWorkStation']],
+};
+
+async function power(action) {
+  const cmd = POWER[action];
+  if (!cmd) return { ok: false, error: 'Unknown action' };
+  log('power', action);
+  if (!IS_WIN) return { ok: true, dryRun: true };
+  const { err } = await quiet(cmd[0], cmd[1]);
+  return err ? { ok: false, error: err.message } : { ok: true };
+}
+
+// ---------------------------------------------------------------- input service
+// input.ps1 owns the remote's system keys in every app: Home (tap = home
+// screen, hold = quick settings) and volume. Windows would hand those to
+// Explorer, which the TV account doesn't run. While the system layer shows
+// something to move around in, input.ps1 also takes the arrows, OK and Back
+// away from the app and sends them here. It also does the keyboard's typing.
+const HOLD_MS = 600;
+let input = null;
+let homeDown = null;      // { fired } while Home is held
+let hwKeyboardAt = 0;     // last time someone typed on a real keyboard
+
+function startInput() {
+  if (!IS_WIN) return;
+  input = startPs('input.ps1', onInput, (child) => {
+    if (input !== child) return;
+    input = null;
+    if (!quitting) setTimeout(startInput, 3000); // the remote must keep working
+  });
+}
+
+function inputSend(req) {
+  if (input?.stdin.writable) input.stdin.write(JSON.stringify(req) + '\n');
+}
+
+function onInput(msg) {
+  if (msg.ev === 'key') {
+    if (msg.k === 'home') onHomeKey(msg.down, msg.repeat);
+    else if (['volup', 'voldown', 'mute'].includes(msg.k)) volumeKey(msg.k);
+    else layerSend('key', { k: msg.k, repeat: msg.repeat });
+  } else if (msg.ev === 'text') onTextFocus(msg);
+  else if (msg.ev === 'hwtype') { hwKeyboardAt = Date.now(); closeSurface('keyboard'); }
+  else if (msg.ev === 'grab-expired') { log('input: grab expired'); closeSurfaces(); }
+  else if (msg.ev === 'ready') { log(`input: ready hook=${msg.hook} uia=${msg.uia}`); syncGrab(); }
+  else if (msg.ev === 'error') log('input:', msg.message);
+}
+
+function onHomeKey(down, repeat) {
+  if (down && !repeat) {
+    const press = { fired: false };
+    press.timer = setTimeout(() => { press.fired = true; openQuick(); }, HOLD_MS);
+    homeDown = press;
+  } else if (!down && homeDown) {
+    clearTimeout(homeDown.timer);
+    if (!homeDown.fired) goHome('home key');
+    homeDown = null;
+  }
+}
+
+// Volume keys step the default output and show the volume on top of the app.
+const volKeys = [];
+async function volumeKey(k) {
+  volKeys.push(k === 'volup' ? 'up' : k === 'voldown' ? 'down' : 'mute');
+  if (volKeys.length > 1) return; // the running loop below takes it
+  let last = null;
+  while (volKeys.length) {
+    last = await system('audio.key', { key: volKeys[0] });
+    volKeys.shift();
+  }
+  if (last?.ok) openSurface('volume', last.result);
+}
+
+// ---------------------------------------------------------------- system layer
+// One transparent, always-on-top window over the whole screen. It never takes
+// the focus (WS_EX_NOACTIVATE), so the app underneath keeps its text cursor
+// and the keyboard's typing lands there. Hidden whenever it shows nothing.
+const SURFACES = ['quick', 'keyboard', 'volume', 'notice'];
+const INTERACTIVE = ['quick', 'keyboard', 'notice']; // these take the remote's arrows/OK/Back
+const SLEEP_STEPS = [0, 15, 30, 60, 90, 120];
+let layer = null;
+const surfaces = new Set();
+let keyboardAuto = false;  // opened because a text field got the focus
+let sleepTimer = null;     // { minutes, at, warn, fire }
+let layerHideTimer = 0;
+
+function createLayer() {
+  layer = new BrowserWindow({
+    ...screen.getPrimaryDisplay().bounds,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    focusable: !!process.env.WINTV_LAYER_FOCUSABLE, // Linux test runs have no input.ps1
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'layer-preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  layer.removeMenu();
+  layer.setIgnoreMouseEvents(true);
+  layer.loadURL('wintv://ui/layer.html');
+  layer.on('close', (e) => { if (!quitting) e.preventDefault(); });
+  layer.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  layer.webContents.on('will-navigate', (e) => e.preventDefault());
+  layer.webContents.on('console-message', (e) => {
+    if (e.level === 'error' || e.level === 'warning') log('layer', e.level, e.message, `${e.sourceId}:${e.lineNumber}`);
+  });
+  layer.webContents.on('render-process-gone', (_e, d) => {
+    log('layer renderer gone:', d.reason);
+    surfaces.clear();
+    syncGrab();
+    setTimeout(() => { if (!layer.isDestroyed()) layer.reload(); }, 500);
+  });
+  const fit = () => { if (!layer.isDestroyed()) layer.setBounds(screen.getPrimaryDisplay().bounds); };
+  screen.on('display-metrics-changed', fit);
+  screen.on('display-added', fit);
+  screen.on('display-removed', fit);
+}
+
+function layerSend(channel, data) {
+  if (layer && !layer.isDestroyed()) layer.webContents.send(channel, data);
+}
+
+function syncGrab() {
+  const interactive = [...surfaces].some((s) => INTERACTIVE.includes(s));
+  inputSend({ op: 'grab', on: interactive });
+  if (layer && !layer.isDestroyed()) layer.setIgnoreMouseEvents(!interactive);
+}
+
+function openSurface(name, data) {
+  if (!layer || layer.isDestroyed()) return;
+  // One thing to move around in at a time: quick settings gives way to the keyboard.
+  if (INTERACTIVE.includes(name)) for (const s of INTERACTIVE) if (s !== name && s !== 'notice') closeSurface(s);
+  surfaces.add(name);
+  clearTimeout(layerHideTimer);
+  layerSend('show', { surface: name, data });
+  if (!layer.isVisible()) {
+    if (process.env.WINTV_LAYER_FOCUSABLE) layer.show(); else layer.showInactive();
+  }
+  layer.setAlwaysOnTop(true, 'screen-saver'); // above full-screen apps, and back above home after goHome
+  layer.moveTop();
+  syncGrab();
+}
+
+function closeSurface(name) {
+  if (!surfaces.delete(name)) return;
+  if (name === 'keyboard') keyboardAuto = false;
+  layerSend('hide', name);
+  syncGrab();
+  if (!surfaces.size) {
+    clearTimeout(layerHideTimer);
+    layerHideTimer = setTimeout(() => { if (!surfaces.size && !layer.isDestroyed()) layer.hide(); }, 400); // after the fade
+  }
+}
+
+function closeSurfaces(except = []) {
+  for (const s of [...surfaces]) if (!except.includes(s)) closeSurface(s);
+}
+
+async function openQuick() {
+  if (surfaces.has('quick')) { closeSurface('quick'); return; } // hold Home again to close
+  const audio = await system('audio.get');
+  openSurface('quick', {
+    audio: audio.ok ? audio.result : null,
+    sleep: sleepState(),
+    sleepSteps: SLEEP_STEPS,
+    appInFront: !!win && !win.isDestroyed() && !win.isFocused(),
+    profiles: config.profiles.length > 1,
+  });
+}
+
+// The keyboard's letters follow the household's layout: German homes get
+// QWERTZ with umlauts, everyone else QWERTY. The layout key switches anyway.
+function keyboardLayout() {
+  const want = config.keyboard.layout;
+  if (want === 'qwerty' || want === 'qwertz') return want;
+  const langs = [app.getSystemLocale?.() || '', ...(app.getPreferredSystemLanguages?.() || [])];
+  return langs.some((l) => /^de\b/i.test(l)) ? 'qwertz' : 'qwerty';
+}
+
+function openKeyboard(password, auto) {
+  openSurface('keyboard', { password: !!password, layout: keyboardLayout() });
+  keyboardAuto = auto;
+}
+
+// A text field got the focus somewhere (input.ps1, via UI Automation): bring
+// the keyboard up, the way a TV does. Not while someone uses a real keyboard.
+function onTextFocus(msg) {
+  if (msg.on) {
+    if (!config.keyboard.autoOpen || Date.now() - hwKeyboardAt < 10 * 60000) return;
+    if (surfaces.has('quick') || surfaces.has('notice')) return;
+    // Apps report the same field again as you type; the layer keeps its
+    // place and only takes the password flag from a repeat.
+    if (!surfaces.has('keyboard')) log('keyboard: text field', msg.password ? '(password)' : '');
+    openKeyboard(msg.password, true);
+  } else if (keyboardAuto) {
+    log('keyboard: text field left');
+    closeSurface('keyboard');
+  }
+}
+
+// Sleep timer: like a TV's, it warns a minute before and a button press
+// cancels it. It doesn't survive a restart, on purpose.
+function sleepState() {
+  return sleepTimer ? { minutes: sleepTimer.minutes, at: sleepTimer.at } : { minutes: 0 };
+}
+
+function setSleepTimer(minutes) {
+  if (sleepTimer) { clearTimeout(sleepTimer.warn); clearTimeout(sleepTimer.fire); sleepTimer = null; }
+  closeSurface('notice');
+  if (!minutes) { log('sleep timer off'); return sleepState(); }
+  const ms = minutes * 60000;
+  sleepTimer = {
+    minutes,
+    at: Date.now() + ms,
+    warn: setTimeout(() => openSurface('notice', { kind: 'sleep', at: sleepTimer.at }), ms - 60000),
+    fire: setTimeout(() => { sleepTimer = null; closeSurfaces(); power('sleep'); }, ms),
+  };
+  log('sleep timer', String(minutes));
+  return sleepState();
+}
+
+const KEYBOARD_KEYS = ['backspace', 'enter', 'left', 'right', 'tab'];
+
+const LAYER_ACTIONS = {
+  home: () => { goHome('quick settings'); return {}; },
+  keyboard: () => { openKeyboard(false, false); return {}; },
+  'screen-off': () => {
+    closeSurfaces();
+    // Wait for the OK button to be let go, or its release wakes the picture again.
+    setTimeout(() => inputSend({ op: 'screen-off' }), 800);
+    return {};
+  },
+  'sleep-timer': (m) => {
+    if (!SLEEP_STEPS.includes(m)) throw new Error('bad argument');
+    return setSleepTimer(m);
+  },
+  'sleep-now': () => { setSleepTimer(0); closeSurfaces(); setTimeout(() => power('sleep'), 300); return {}; },
+  who: () => { goHome('who is watching'); win.webContents.send('picker'); return {}; },
+  volume: async (v) => result(await system('audio.set', { volume: v })),
+  mute: async (on) => result(await system('audio.set', { muted: on === true })),
+};
+
+function result(r) {
+  if (!r.ok) throw new Error(r.error);
+  return r.result;
+}
+
+// IPC from the two windows: each may only call its own set.
+const fromHome = (fn) => (e, ...a) => (e.sender === win?.webContents ? fn(...a) : { ok: false, error: 'not allowed' });
+const fromLayer = (fn) => (e, ...a) => (e.sender === layer?.webContents ? fn(...a) : { ok: false, error: 'not allowed' });
+
+function layerIpc() {
+  ipcMain.on('layer:close', (e, name) => {
+    if (e.sender === layer?.webContents && SURFACES.includes(name)) closeSurface(name);
+  });
+  ipcMain.handle('layer:type', fromLayer((text) => {
+    // One key's worth (".com" is the longest), printable characters only.
+    if (typeof text !== 'string' || !text.length || text.length > 8 || /[\u0000-\u001f\u007f]/.test(text)) return { ok: false, error: 'bad argument' };
+    inputSend({ op: 'type', text });
+    return { ok: true };
+  }));
+  ipcMain.handle('layer:key', fromLayer((name) => {
+    if (!KEYBOARD_KEYS.includes(name)) return { ok: false, error: 'bad argument' };
+    inputSend({ op: 'key', key: name });
+    return { ok: true };
+  }));
+  ipcMain.handle('layer:action', fromLayer(async (name, arg) => {
+    const fn = LAYER_ACTIONS[name];
+    if (!fn) return { ok: false, error: 'Unknown action' };
+    try { return { ok: true, result: await fn(arg) }; } catch (e) { return { ok: false, error: e.message }; }
+  }));
+}
+
+// ---------------------------------------------------------------- ui files
+// The screens are served from the app's own ui/ folder under wintv://ui/,
+// not file://. The exe's GrantFileProtocolExtraPrivileges fuse is off (a
+// file:// page could otherwise read other local files), and with it off the
+// packaged app cannot load its page from file:// at all (ERR_FILE_NOT_FOUND,
+// a black screen on the first VM run). This handler serves only files
+// inside ui/.
+const UI_DIR = path.join(__dirname, 'ui');
+const UI_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+};
+protocol.registerSchemesAsPrivileged([{ scheme: 'wintv', privileges: { standard: true, secure: true } }]);
+
+function serveUi() {
+  protocol.handle('wintv', (req) => {
+    const url = new URL(req.url);
+    const file = path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
+    if (url.host !== 'ui' || !file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
+    try {
+      return new Response(fs.readFileSync(file), { headers: { 'content-type': UI_TYPES[path.extname(file)] || 'application/octet-stream' } });
+    } catch {
+      return new Response('', { status: 404 });
+    }
+  });
+}
+
+// ---------------------------------------------------------------- window
+function goHome(reason) {
+  if (!win || win.isDestroyed()) return;
+  log('home', reason);
+  closeSurfaces(['volume', 'notice']); // the sleep-timer warning stays until answered
+  if (win.isMinimized()) win.restore();
+  win.show();
+  // Briefly topmost so Windows lets the home screen take the foreground back.
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.focus();
+  win.webContents.focus();
+  setTimeout(() => { if (!win.isDestroyed()) win.setAlwaysOnTop(false); }, 400);
+  win.webContents.send('home');
+}
+
+function createWindow() {
+  win = new BrowserWindow({
+    fullscreen: !process.env.WINTV_WINDOWED,
+    width: 1600,
+    height: 900,
+    frame: false,
+    show: false,
+    backgroundColor: '#000000',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  win.removeMenu();
+  win.loadURL('wintv://ui/index.html');
+  win.once('ready-to-show', () => {
+    log('window ready');
+    win.show();
+    // Start the Settings helper in the background: PowerShell takes a second
+    // or two to start, which would otherwise delay the first Settings page.
+    setTimeout(() => { if (IS_WIN && !helper) helper = startHelper(); }, 3000);
+  });
+  win.on('close', (e) => { if (!quitting) e.preventDefault(); }); // Alt+F4 must not kill the shell
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  // The log is the only window into a TV with no desktop: record whether the
+  // page loaded and any error it printed.
+  win.webContents.on('did-finish-load', () => log('ui loaded'));
+  win.webContents.on('did-fail-load', (_e, code, desc) => log('ui failed to load:', String(code), desc));
+  win.webContents.on('console-message', (e) => {
+    if (e.level === 'error' || e.level === 'warning') log('ui', e.level, e.message, `${e.sourceId}:${e.lineNumber}`);
+  });
+  win.webContents.on('render-process-gone', (_e, d) => {
+    log('renderer gone:', d.reason);
+    setTimeout(() => { if (!win.isDestroyed()) win.reload(); }, 500);
+  });
+}
+
+// input.ps1 handles Home (and holding it) in every app. These shortcuts are
+// the fallback while it isn't running, plus quick settings for a keyboard.
+function registerHomeKeys() {
+  const keys = [...config.homeKeys.map((acc) => [acc, () => goHome(acc)]),
+    ...config.quickKeys.map((acc) => [acc, () => openQuick()])];
+  for (const [acc, fn] of keys) {
+    try {
+      log(`shortcut ${acc}:`, globalShortcut.register(acc, fn) ? 'registered' : 'taken');
+    } catch (e) {
+      log(`shortcut ${acc}: invalid (${e.message})`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- supervisor
+// Windows starts the shell once and never again: on the VM, killing the
+// shell left a black screen until the next restart. So the shell is
+// `WinTV.exe --supervise`, a small parent with no window whose only job is
+// to start the real shell (`--child`) and start it again whenever it
+// exits. If it keeps crashing, it waits longer between starts.
+const SUPERVISE = process.argv.includes('--supervise');
+const CHILD = process.argv.includes('--child');
+const EXIT_ALREADY_RUNNING = 3;
+
+function supervise() {
+  app.disableHardwareAcceleration();
+  let recent = [];
+  const start = (delay) => setTimeout(() => {
+    const passOn = process.argv.slice(1).filter((a) => a !== '--supervise');
+    const child = spawn(process.execPath, [...passOn, '--child'], { stdio: 'ignore' });
+    child.once('error', (e) => { log('supervisor: cannot start the shell:', e.message); start(10000); });
+    child.once('exit', (code) => {
+      log('supervisor: shell exited', String(code));
+      const now = Date.now();
+      recent = recent.filter((t) => now - t < 60000).concat(now);
+      if (code === EXIT_ALREADY_RUNNING) start(30000);
+      else start(recent.length > 5 ? 10000 : 300);
+    });
+  }, delay);
+  app.whenReady().then(() => { log('supervisor: start'); start(0); });
+}
+
+// ---------------------------------------------------------------- startup
+process.on('uncaughtException', (e) => {
+  log('fatal:', e.stack || String(e));
+  if (!CHILD) app.relaunch(); // under the supervisor, exiting is enough
+  app.exit(1);
+});
+
+if (SUPERVISE) {
+  supervise();
+} else if (!app.requestSingleInstanceLock()) {
+  app.exit(CHILD ? EXIT_ALREADY_RUNNING : 0);
+} else {
+  app.on('second-instance', () => goHome('second-instance'));
+  app.whenReady().then(() => {
+    config = loadConfig();
+    log(`start v${app.getVersion()} user=${os.userInfo().username} browser=${config.browser || 'none'}`);
+    session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+    serveUi();
+    ipcMain.handle('wintv:state', fromHome(() => publicState()));
+    ipcMain.handle('wintv:launch', fromHome((id) => launch(String(id))));
+    ipcMain.handle('wintv:quit', fromHome((id) => quitApp(String(id))));
+    ipcMain.handle('wintv:power', fromHome((action) => power(String(action))));
+    ipcMain.handle('wintv:profile', fromHome((id) => setProfile(String(id))));
+    ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
+    layerIpc();
+    if (config.profiles.length === 1) profile = config.profiles[0];
+    // Waking the TV shows the lock screen; the next button asks who is watching.
+    powerMonitor.on('resume', () => {
+      setSleepTimer(0);
+      closeSurfaces();
+      goHome('resume');
+      win.webContents.send('lock');
+    });
+    app.on('child-process-gone', (_e, d) => log('process gone:', d.type, d.reason, String(d.exitCode)));
+    app.getGPUInfo('basic')
+      .then((g) => log('gpu:', (g.gpuDevice || []).map((d) => `${d.vendorId}:${d.deviceId}${d.active ? '*' : ''}`).join(' ') || 'none'))
+      .catch((e) => log('gpu:', e.message));
+    startInput();
+    createWindow();
+    createLayer();
+    registerHomeKeys();
+  });
+  app.on('window-all-closed', () => { if (!quitting) createWindow(); });
+  app.on('before-quit', () => { quitting = true; });
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopHelper('quit'); input?.kill(); });
+}

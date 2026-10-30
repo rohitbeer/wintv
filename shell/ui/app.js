@@ -1,6 +1,8 @@
 'use strict';
 // WinTV home screen: focus engine, input (remote keys, gamepad, air mouse),
-// the top shelf and the menus. Talks to the machine only through window.wintv.
+// the top shelf, Settings and the menus. One of the WinTV shell's two
+// windows; the other, the system layer (layer.js), floats over every app.
+// Talks to the machine only through window.wintv.
 
 const GLYPHS = {
   play: '<path d="M9 6.2v11.6l9.2-5.8z" fill="currentColor" stroke-linejoin="round"/>',
@@ -37,6 +39,7 @@ const api = window.wintv || {
   onState: () => {},
   onHome: () => {},
   onLock: () => {},
+  onPicker: () => {},
 };
 
 // Sample answers for design work in a plain browser.
@@ -285,7 +288,6 @@ function openPower() {
     { label: 'Restart', run: act('restart') },
     { label: 'Shut Down', run: act('shutdown') },
     ...(profiles.length > 1 ? [{ label: 'Switch Profile', run: () => { closeSheet(); openPicker(); } }] : []),
-    { label: 'Admin Sign-in', run: act('switch-user') },
     { label: 'Cancel', run: closeSheet },
   ]);
 }
@@ -523,6 +525,7 @@ function openSettings() {
 
 function closeSettings() {
   settings = null;
+  repair = { taps: 0, open: false };
   $('settings').classList.add('hidden');
   setFocus(pos.row, pos.col, true);
 }
@@ -623,6 +626,8 @@ async function activateSetting() {
     r.on = !r.on;
     paintRows();
     await r.run(r.on);
+  } else if (r.press) {
+    r.press();
   }
 }
 
@@ -722,10 +727,28 @@ function networkRows({ connections }) {
   ]);
 }
 
+// Repair mode: the Windows desktop, for the admin, when something needs
+// fixing that WinTV's own screens can't. Hidden the way Android hides its
+// developer options: press OK on "WinTV" in About seven times (D-22).
+let repair = { taps: 0, open: false };
+const REPAIR_TAPS = 7;
+
+function repairTap() {
+  if (repair.open) return;
+  repair.taps += 1;
+  if (repair.taps >= REPAIR_TAPS) {
+    repair.open = true;
+    toast('Repair mode is now at the bottom of About');
+    loadSection();
+  } else if (repair.taps >= 4) {
+    toast(`${REPAIR_TAPS - repair.taps} more for repair mode`);
+  }
+}
+
 function aboutRows(a) {
   const hours = Math.floor(a.uptimeMinutes / 60);
   const rows = [
-    { kind: 'info', label: 'WinTV', value: appVersion },
+    { kind: 'info', label: 'WinTV', value: appVersion, press: repairTap },
     { kind: 'info', label: 'Windows', value: `${a.windows.replace(/^Microsoft /, '')} ${a.version}` },
     { kind: 'info', label: 'Device name', value: a.device },
     { kind: 'info', label: 'Last update', value: a.lastUpdate ? new Date(a.lastUpdate).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' }) : 'Not yet' },
@@ -734,6 +757,12 @@ function aboutRows(a) {
   if (a.restartNeeded) {
     rows.push({ kind: 'choice', label: 'Updates', value: 'Restart to finish', options: [
       { label: 'Restart Now', run: async () => { const r = await api.power('restart'); if (!r.ok) toast(r.error); } }] });
+  }
+  if (repair.open) {
+    $('set-note').textContent = 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
+      + 'and gets the Windows desktop. Signing out there brings the TV back.';
+    rows.push({ kind: 'choice', label: 'Repair mode', value: 'Windows desktop', options: [
+      { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] });
   }
   return rows;
 }
@@ -834,8 +863,15 @@ function watchIdle() {
     running = new Set(s.running);
     paintRunning();
   });
-  api.onHome(() => { touched(); closeSheet(); if (settings) closeSettings(); setFocus(pos.row, pos.col, true); });
+  api.onHome(() => {
+    if (wake()) return; // Home on the clock screen wakes the TV, like any button
+    touched();
+    closeSheet();
+    if (settings) closeSettings();
+    setFocus(pos.row, pos.col, true);
+  });
   api.onLock(() => showLock(true));
+  api.onPicker(() => { if (lock) wake(); if (profiles.length > 1 && !picker) openPicker(); });
   if (profiles.length > 1) openPicker(); else paintMe();
   clock();
   watchIdle();

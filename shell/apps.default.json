@@ -1,5 +1,5 @@
 {
-  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching.",
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz.",
   "browserCandidates": [
     "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -12,9 +12,16 @@
     "Super+Escape",
     "Control+Alt+H"
   ],
+  "quickKeys": [
+    "Control+Alt+Q"
+  ],
   "lockScreen": {
     "afterMinutes": 5,
     "askWhoAfterMinutes": 30
+  },
+  "keyboard": {
+    "autoOpen": true,
+    "layout": "auto"
   },
   "profiles": [
     {

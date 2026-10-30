@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+  <title>WinTV system layer</title>
+  <link rel="stylesheet" href="layer.css">
+</head>
+<body>
+  <aside id="quick" class="panel hidden" role="dialog" aria-label="Quick settings">
+    <div class="q-head">
+      <div id="q-time"></div>
+      <div id="q-date"></div>
+    </div>
+    <div id="q-rows"></div>
+    <div class="q-hint">Hold Home again to close</div>
+  </aside>
+
+  <section id="kb" class="panel hidden" role="dialog" aria-label="Keyboard">
+    <div class="kb-top">
+      <div id="kb-echo"></div>
+      <div id="kb-note"></div>
+    </div>
+    <div id="kb-keys"></div>
+  </section>
+
+  <div id="vol" class="panel hidden" aria-live="polite">
+    <span id="vol-glyph"></span>
+    <div class="vol-bar"><div id="vol-fill"></div></div>
+    <div id="vol-num"></div>
+  </div>
+
+  <section id="notice" class="panel hidden" role="alertdialog">
+    <div id="n-title"></div>
+    <div id="n-text"></div>
+    <div id="n-buttons"></div>
+  </section>
+
+  <script src="layer.js"></script>
+</body>
+</html>

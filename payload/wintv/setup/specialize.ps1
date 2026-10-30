@@ -65,10 +65,10 @@ Invoke-Step 'default browser for new accounts' {
     Invoke-Native "$env:SystemRoot\System32\dism.exe" @('/Online', "/Import-DefaultAppAssociations:$PSScriptRoot\associations.xml") | Out-Null
 }
 
-Invoke-Step 'install the WinTV launcher' {
+Invoke-Step 'install the WinTV shell' {
     $dest = "$env:ProgramFiles\WinTV"
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
-    Copy-Item -Path (Join-Path $Payload 'launcher\*') -Destination $dest -Recurse -Force
+    Copy-Item -Path (Join-Path $Payload 'shell\*') -Destination $dest -Recurse -Force
     if (-not (Test-Path "$dest\WinTV.exe")) { throw 'WinTV.exe missing after copy' }
     $site = Join-Path $Payload 'config\apps.json'
     if (Test-Path $site) { Copy-Item $site (Join-Path $Root 'apps.json') -Force; Write-Log '  site config installed' }
@@ -91,7 +91,7 @@ Invoke-Step 'services: telemetry off' {
 Invoke-Step 'power and boot: quiet, straight to the TV' {
     Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/hibernate', 'off') | Out-Null
     # Screen off after 30 idle minutes, sleep after 60 (plugged in; half that
-    # on battery). The launcher's lock screen comes first, after 5 minutes.
+    # on battery). The shell's lock screen comes first, after 5 minutes.
     foreach ($t in @(@('monitor-timeout-ac', 30), @('standby-timeout-ac', 60), @('monitor-timeout-dc', 15), @('standby-timeout-dc', 30))) {
         Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/change', $t[0], [string]$t[1]) | Out-Null
     }

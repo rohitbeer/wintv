@@ -5,12 +5,14 @@
 #   {"id":2,"op":"display.set","width":1920,"height":1080,"hz":60}
 #   {"id":3,"op":"audio.get"}                      output device, volume 0-100, muted
 #   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}
+#   {"id":7,"op":"audio.key","key":"up"}           the remote's volume keys: up | down | mute
 #   {"id":5,"op":"network.get"}                    connections and their addresses
 #   {"id":6,"op":"about"}                          Windows version, updates, uptime
+#   {"id":8,"op":"process.find","dir":"C:\\..."}   browser processes using this WinTV profile folder
 # Each op reads, or changes only the one setting it is named after. main.js
 # checks every argument before it gets here.
 $ErrorActionPreference = 'Stop'
-# Progress bars would arrive on stderr as XML noise in the launcher's log.
+# Progress bars would arrive on stderr as XML noise in the shell's log.
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
@@ -212,8 +214,26 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 if ($null -ne $req.muted) { [WinTV.Audio]::SetMute([bool]$req.muted) }
                 Get-AudioInfo
             }
+            'audio.key'   {
+                $now = [WinTV.Audio]::Get()
+                if ($req.key -eq 'mute') {
+                    [WinTV.Audio]::SetMute(-not [bool]$now[2])
+                } else {
+                    # Steps of 2, like Windows' own volume keys; turning it up unmutes, like a TV.
+                    [WinTV.Audio]::SetVolume([int]$now[1] + $(if ($req.key -eq 'up') { 2 } else { -2 }))
+                    if ($req.key -eq 'up' -and [bool]$now[2]) { [WinTV.Audio]::SetMute($false) }
+                }
+                Get-AudioInfo
+            }
             'network.get' { @{ connections = @(Get-NetworkInfo) } }
             'about'       { Get-About }
+            'process.find' {
+                # The browser's main process (no --type=) started with exactly this --user-data-dir.
+                $pattern = [regex]::Escape([string]$req.dir) + '("|\s|$)'
+                @{ pids = @(Get-CimInstance Win32_Process -Filter "Name='brave.exe' OR Name='chrome.exe'" |
+                    Where-Object { $_.CommandLine -and $_.CommandLine -notmatch ' --type=' -and $_.CommandLine -match $pattern } |
+                    ForEach-Object { [int]$_.ProcessId }) }
+            }
             default       { throw "unknown op '$($req.op)'" }
         }
         $answer = @{ id = $req.id; ok = $true; result = $result }

@@ -1,6 +1,6 @@
 # WinTV: first sign-in of every new account (Default-profile RunOnce).
 # Every account gets the WinTV lock screen picture; only tv also gets the
-# launcher as its shell (admin keeps Explorer).
+# WinTV shell in place of Explorer (admin keeps Explorer for repair mode).
 $log = Join-Path $env:LOCALAPPDATA 'WinTV\firstlogon.log'
 New-Item -ItemType Directory -Path (Split-Path $log) -Force | Out-Null
 function Log([string]$m) { "$(Get-Date -Format s) $m" | Out-File $log -Append -Encoding utf8 }
@@ -26,7 +26,7 @@ try {
 if ($env:USERNAME -ne 'tv') { exit 0 }
 $k = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
 if (-not (Test-Path $k)) { New-Item -Path $k | Out-Null }
-# --supervise: a small parent that restarts the launcher if it ever exits.
+# --supervise: a small parent that restarts the shell if it ever exits.
 Set-ItemProperty $k -Name Shell -Value "`"$env:ProgramFiles\WinTV\WinTV.exe`" --supervise"
 Log 'shell set to WinTV; restarting into it'
 shutdown.exe /r /t 2 /c "Starting WinTV"

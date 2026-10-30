@@ -14,5 +14,5 @@ $r.tvShell = (Get-ItemProperty "Registry::HKEY_USERS\$($tv.SID)\Software\Microso
 $r.processes = @(Get-Process -IncludeUserName -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -in 'WinTV', 'brave', 'explorer', 'qemu-ga' } |
     Group-Object ProcessName, UserName | ForEach-Object { "$($_.Name) x$($_.Count)" })
 $r.firstLogon = @(Get-Content C:\Users\tv\AppData\Local\WinTV\firstlogon.log -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
-$r.launcherLog = @(Get-Content C:\Users\tv\AppData\Roaming\WinTV\launcher.log -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
+$r.shellLog = @(Get-Content C:\Users\tv\AppData\Roaming\WinTV\shell.log -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
 $r | ConvertTo-Json -Depth 4

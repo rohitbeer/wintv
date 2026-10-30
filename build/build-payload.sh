@@ -11,9 +11,9 @@ CACHE=$ROOT/out/cache
 rm -rf "$ROOT/out/payload-$VARIANT"
 mkdir -p "$OUT/apps" "$OUT/config" "$CACHE"
 
-echo "== launcher"
-(cd "$ROOT/launcher" && npm ci --no-audit --no-fund --loglevel=error && node build.mjs)
-cp -r "$ROOT/launcher/dist/WinTV-win32-x64" "$OUT/launcher"
+echo "== shell"
+(cd "$ROOT/shell" && npm ci --no-audit --no-fund --loglevel=error && node build.mjs)
+cp -r "$ROOT/shell/dist/WinTV-win32-x64" "$OUT/shell"
 
 echo "== setup scripts, site '$SITE'"
 cp -r "$ROOT/payload/wintv/setup" "$OUT/setup"

@@ -1,8 +1,8 @@
 {
-  "name": "wintv-launcher",
+  "name": "wintv-shell",
   "productName": "WinTV",
   "version": "0.1.0",
-  "description": "10-foot home screen that replaces Explorer as the shell of the WinTV user",
+  "description": "WinTV shell: the whole TV interface of Windows for the tv account (home, system layer, settings), in place of Explorer",
   "main": "main.js",
   "private": true,
   "scripts": {

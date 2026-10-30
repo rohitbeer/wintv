@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Screenshot of what the tv account sees, taken inside Windows.
 #   vm/tvshot.sh out.png
-# QEMU's own screendump (shot.sh) shows the launcher with its colour
-# channels rotated once it is full screen, so the launcher's colours are
+# QEMU's own screendump (shot.sh) shows the WinTV shell with its colour
+# channels rotated once it is full screen, so its colours are
 # checked with this one, which asks Windows for the picture.
+# It briefly runs a console in the TV session, which takes the focus from
+# the app in front (so the on-screen keyboard closes). Use shot.sh when
+# testing anything that depends on focus.
 set -euo pipefail
 OUT=${1:?usage: tvshot.sh out.png}
 ID=${ID:-222}

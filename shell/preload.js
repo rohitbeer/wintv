@@ -1,5 +1,5 @@
 'use strict';
-// The only bridge between the UI and the machine: six calls, three events.
+// The home screen's only bridge to the machine: six calls, four events.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('wintv', {
@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('wintv', {
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onHome: (cb) => ipcRenderer.on('home', () => cb()),
   onLock: (cb) => ipcRenderer.on('lock', () => cb()),
+  onPicker: (cb) => ipcRenderer.on('picker', () => cb()),
 });

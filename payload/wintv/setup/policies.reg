@@ -81,7 +81,7 @@ Windows Registry Editor Version 5.00
 
 ; No Windows lock screen "curtain": locking goes straight to the sign-in
 ; screen, which shows the WinTV picture (set per account by firstlogon.ps1).
-; No camera or slideshow on it. The TV's own lock screen is in the launcher.
+; No camera or slideshow on it. The TV's own lock screen is part of the WinTV shell.
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Personalization]
 "NoLockScreen"=dword:00000001
 "NoLockScreenCamera"=dword:00000001
@@ -98,7 +98,7 @@ Windows Registry Editor Version 5.00
 "DoNotUpdateToEdgeWithChromium"=dword:00000001
 
 ; Brave as a TV browser: no wallet/rewards/VPN/AI/Tor/news upsells, no
-; usage pings, and it exits when its window closes so the launcher sees it.
+; usage pings, and it exits when its window closes so the shell sees it.
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\BraveSoftware\Brave]
 "BraveRewardsDisabled"=dword:00000001
 "BraveWalletDisabled"=dword:00000001
@@ -114,6 +114,8 @@ Windows Registry Editor Version 5.00
 "DefaultBrowserSettingEnabled"=dword:00000000
 "PromotionalTabsEnabled"=dword:00000000
 "BackgroundModeEnabled"=dword:00000000
+; No "Translate this page?" bubble popping up over a film or a search
+"TranslateEnabled"=dword:00000000
 
 ; Same for Chrome, if a build uses Chrome instead
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome]
@@ -121,3 +123,4 @@ Windows Registry Editor Version 5.00
 "DefaultBrowserSettingEnabled"=dword:00000000
 "PromotionalTabsEnabled"=dword:00000000
 "BackgroundModeEnabled"=dword:00000000
+"TranslateEnabled"=dword:00000000
