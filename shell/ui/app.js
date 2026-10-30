@@ -16,6 +16,8 @@ const GLYPHS = {
   sound: '<path d="M4.5 9.5h3l4.5-3.8v12.6l-4.5-3.8h-3z" stroke-linejoin="round"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>',
   update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
+  moon: '<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" stroke-linejoin="round"/>',
+  access: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="7.4" r=".9" fill="currentColor"/><path d="M7.6 9.8l4.4.9 4.4-.9M12 10.7v3.4M12 14.1l-2.2 3.6M12 14.1l2.2 3.6"/>',
 };
 
 function glyph(name) {
@@ -27,12 +29,16 @@ const api = window.wintv || {
   getState: async () => {
     const cfg = await (await fetch('../apps.default.json')).json();
     const tag = (list, row) => list.map((a) => ({ ...a, row, available: true }));
+    // ?lock=1 starts the screen saver after a minute; ?text=large, ?contrast, ?still try the accessibility settings.
     const q = new URLSearchParams(location.search);
-    const lockScreen = { ...cfg.lockScreen, ...(q.has('lock') ? { afterMinutes: Number(q.get('lock')) } : {}) };
+    const prefs = { screenSaverMinutes: Number(q.get('lock') || cfg.lockScreen.afterMinutes), screenSaverStyle: q.get('saver') || 'colour',
+      askWhoMinutes: cfg.lockScreen.askWhoAfterMinutes, navSounds: 'normal', textSize: q.get('text') || 'default',
+      reduceMotion: q.has('still'), highContrast: q.has('contrast') };
     return { apps: tag(cfg.apps, 0), system: tag(cfg.system, 1), running: ['youtube'], browser: 'brave', user: 'preview',
-      profiles: cfg.profiles || [], profile: null, lockScreen };
+      profiles: cfg.profiles || [], profile: null, prefs };
   },
   setProfile: async () => ({ ok: true }),
+  setPref: async (key, value) => ({ ok: true, result: { ...prefs, [key]: value } }),
   system: async (op) => ({ ok: true, result: MOCK_SYSTEM[op] }),
   updates: async () => ({ ok: true, result: MOCK_UPDATES }),
   launch: async (id) => ({ ok: true, preview: id }),
@@ -42,6 +48,7 @@ const api = window.wintv || {
   onHome: () => {},
   onLock: () => {},
   onPicker: () => {},
+  onPrefs: () => {},
 };
 
 // Sample answers for design work in a plain browser.
@@ -51,6 +58,8 @@ const MOCK_SYSTEM = {
     { width: 1920, height: 1080, hz: 60 }, { width: 1280, height: 720, hz: 60 }] },
   'audio.get': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false },
   'audio.set': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false },
+  'power.get': { screenOff: 30, sleep: 60 },
+  'power.set': { screenOff: 30, sleep: 60 },
   'network.get': { connections: [{ name: 'Ethernet', wifi: false, network: 'Home', internet: true, ipv4: '192.0.2.80', gateway: '192.0.2.1' }] },
   about: { windows: 'Microsoft Windows 11 Pro', version: '25H2 (build 26200.1234)', device: 'WINTV', uptimeMinutes: 1500,
     lastUpdate: new Date(Date.now() - 2 * 86400000).toISOString(), restartNeeded: false },
@@ -74,28 +83,13 @@ let picker = null;        // { index, faces } while "Who's watching?" is up
 let profiles = [];
 let active = null;        // id of the profile using the TV
 let artFlip = false;
-let lockCfg = { afterMinutes: 5, askWhoAfterMinutes: 30 };
+let prefs = { screenSaverMinutes: 5, screenSaverStyle: 'colour', askWhoMinutes: 30 }; // the household's WinTV settings (main.js)
 let lastInput = Date.now();
 let lock = null;          // { since, askWho, timer, tick, spot, hue, flip } while the lock screen is up
 let settings = null;      // { section, col: 'side' | 'rows', row, rows, token } while Settings is open
 let appVersion = '';
 
-// ------------------------------------------------------------------ sound
-let audio = null;
-function tone(freq, ms, gain) {
-  try {
-    audio ||= new AudioContext();
-    const o = audio.createOscillator();
-    const g = audio.createGain();
-    o.type = 'triangle';
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(gain, audio.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + ms / 1000);
-    o.connect(g).connect(audio.destination);
-    o.start();
-    o.stop(audio.currentTime + ms / 1000);
-  } catch { /* no audio device is fine */ }
-}
+// ------------------------------------------------------------------ sound (tone: prefs.js)
 const tick = () => tone(1900, 28, 0.02);
 const select = () => { tone(880, 70, 0.035); setTimeout(() => tone(1320, 90, 0.03), 55); };
 
@@ -485,11 +479,13 @@ function pollPad(t) {
 
 // ------------------------------------------------------------------ motion
 // The focused tile leans toward the pointer/stick and sways a little when
-// idle; the sheen follows the lean like light on a glossy card.
+// idle; the sheen follows the lean like light on a glossy card. Reduce
+// motion holds it still.
 function frame(t) {
   pollPad(t);
   const el = currentTile();
   if (el) {
+    const m = look.still ? 0 : 1;
     const swayX = Math.sin(t / 1500) * 0.35;
     const swayY = Math.cos(t / 1900) * 0.3;
     lean.x += (lean.tx + swayX - lean.x) * 0.07;
@@ -497,12 +493,12 @@ function frame(t) {
     lean.tx *= 0.97;
     lean.ty *= 0.97;
     const s = el.style;
-    s.setProperty('--ry', `${(lean.x * 6).toFixed(2)}deg`);
-    s.setProperty('--rx', `${(-lean.y * 4.5).toFixed(2)}deg`);
-    s.setProperty('--px', `${(lean.x * 0.55).toFixed(3)}vw`);
-    s.setProperty('--py', `${(lean.y * 0.45).toFixed(3)}vh`);
-    s.setProperty('--sx', `${(50 + lean.x * 40).toFixed(1)}%`);
-    s.setProperty('--sy', `${(25 + lean.y * 35).toFixed(1)}%`);
+    s.setProperty('--ry', `${(lean.x * 6 * m).toFixed(2)}deg`);
+    s.setProperty('--rx', `${(-lean.y * 4.5 * m).toFixed(2)}deg`);
+    s.setProperty('--px', `${(lean.x * 0.55 * m).toFixed(3)}vw`);
+    s.setProperty('--py', `${(lean.y * 0.45 * m).toFixed(3)}vh`);
+    s.setProperty('--sx', `${(50 + lean.x * 40 * m).toFixed(1)}%`);
+    s.setProperty('--sy', `${(25 + lean.y * 35 * m).toFixed(1)}%`);
   }
   requestAnimationFrame(frame);
 }
@@ -520,11 +516,27 @@ function clock() {
 const SECTIONS = [
   { id: 'display', name: 'Display', glyph: 'tv' },
   { id: 'sound', name: 'Sound', glyph: 'sound' },
+  { id: 'saver', name: 'Screen Saver', glyph: 'moon' },
+  { id: 'access', name: 'Accessibility', glyph: 'access' },
   { id: 'network', name: 'Network', glyph: 'globe' },
   { id: 'updates', name: 'Updates', glyph: 'update' },
   { id: 'about', name: 'About', glyph: 'info' },
 ];
 const KEEP_SECONDS = 15;
+
+// The line under each section. Set once the section's rows have arrived, so
+// a slow answer from Windows can't put one section's note under another.
+const NOTES = {
+  display: () => 'If the edges of the picture are cut off, turn on your TV’s “Just Scan”, “Screen Fit” or “Full Pixel” picture size.',
+  saver: () => 'The screen saver comes on over the home screen only: a film keeps the TV awake. '
+    + 'Turning off the screen and sleep apply while the PC is plugged in.',
+  access: () => 'Text size and high contrast change WinTV’s own screens, over every app too. '
+    + 'Reduce motion also asks apps and websites to keep still.',
+  updates: () => 'Windows installs its updates by itself too; “Install now” only does it sooner. '
+    + 'WinTV updates are checked every day, and switch in when no app is open.',
+  about: () => (repair.open ? 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
+    + 'and gets the Windows desktop. Signing out there brings the TV back.' : ''),
+};
 
 function openSettings() {
   closeSheet();
@@ -583,6 +595,7 @@ async function loadSection() {
   if (!settings || token !== settings.token) return; // moved on meanwhile
   settings.rows = rows;
   settings.row = Math.min(settings.row, rows.length - 1);
+  $('set-note').textContent = NOTES[s.id]?.() || '';
   paintRows();
 }
 
@@ -596,6 +609,7 @@ async function refreshSection() {
   if (!settings || token !== settings.token || sheet) return;
   settings.rows = rows;
   settings.row = Math.min(settings.row, rows.length - 1);
+  $('set-note').textContent = NOTES[s.id]?.() || '';
   paintRows();
 }
 
@@ -666,6 +680,8 @@ function result(r) {
 async function sectionRows(id) {
   if (id === 'display') return displayRows(result(await api.system('display.get')));
   if (id === 'sound') return soundRows(result(await api.system('audio.get')));
+  if (id === 'saver') return saverRows(result(await api.system('power.get')));
+  if (id === 'access') return accessRows();
   if (id === 'network') return networkRows(result(await api.system('network.get')));
   if (id === 'updates') return updateRows(result(await api.updates('get')));
   return aboutRows(result(await api.system('about')));
@@ -674,7 +690,6 @@ async function sectionRows(id) {
 const fmtMode = (m) => `${m.width} × ${m.height}`;
 
 function displayRows({ current, modes }) {
-  $('set-note').textContent = 'If the edges of the picture are cut off, turn on your TV’s “Just Scan”, “Screen Fit” or “Full Pixel” picture size.';
   if (!current) return [{ kind: 'info', label: 'Picture', value: 'No display found' }];
   // Below 1280 × 720 nothing is readable on a TV, so those sizes aren't offered.
   const sizes = [];
@@ -727,9 +742,35 @@ async function changeMode(next, prev) {
   }, 1000);
 }
 
+// A row whose choices are a fixed list of values; show(value) is its text.
+function pick(label, value, values, show, run) {
+  return { kind: 'choice', label, value: show(value),
+    options: values.map((v) => ({ label: show(v) + (v === value ? '  ✓' : ''), current: v === value, run: () => run(v) })) };
+}
+
+const minutes = (m) => (m === 0 ? 'Never' : m < 60 ? `After ${m} min` : `After ${m / 60} h`);
+
+// WinTV's own settings (main.js keeps them, D-31).
+async function savePref(key, value) {
+  const r = await api.setPref(key, value);
+  if (!r.ok) { toast(r.error || 'Couldn’t change that'); refreshSection(); return; }
+  usePrefs(r.result);
+  if (key === 'navSounds') select(); // hear the new level
+  refreshSection();
+}
+
+function usePrefs(p) {
+  if (!p) return;
+  prefs = p;
+  applyLook(p);
+  $('lock').classList.toggle('dark', p.screenSaverStyle === 'dark');
+}
+
 let volTimer = 0;
 function soundRows(a) {
-  if (!a.present) return [{ kind: 'info', label: 'Sound', value: 'No sound output found' }];
+  const nav = pick('Navigation sounds', prefs.navSounds, ['off', 'soft', 'normal', 'loud'],
+    (v) => v.charAt(0).toUpperCase() + v.slice(1), (v) => savePref('navSounds', v));
+  if (!a.present) return [{ kind: 'info', label: 'Sound', value: 'No sound output found' }, nav];
   const volume = {
     kind: 'slider', label: 'Volume', value: a.volume, step: 5,
     set(v) {
@@ -742,6 +783,41 @@ function soundRows(a) {
     volume,
     { kind: 'toggle', label: 'Mute', on: a.muted, run: (on) => api.system('audio.set', { muted: on }) },
     { kind: 'info', label: 'Output', value: a.device },
+    nav,
+  ];
+}
+
+// The screen saver is WinTV's (the clock screen, below); turning the screen
+// off and sleep are Windows' power plan, which this account may change.
+function saverRows(power) {
+  const rows = [
+    pick('Screen saver', prefs.screenSaverMinutes, [2, 5, 10, 15, 30, 0], minutes, (v) => savePref('screenSaverMinutes', v)),
+    pick('Style', prefs.screenSaverStyle, ['colour', 'dark'], (v) => (v === 'dark' ? 'Clock on black' : 'Clock on colour'),
+      (v) => savePref('screenSaverStyle', v)),
+  ];
+  if (profiles.length > 1) {
+    rows.push(pick('Ask who’s watching', prefs.askWhoMinutes, [15, 30, 60, 120, 0], (m) => (m ? `${minutes(m)} away` : 'Never'),
+      (v) => savePref('askWhoMinutes', v)));
+  }
+  rows.push(
+    pick('Turn off the screen', power.screenOff, [5, 10, 15, 30, 60, 120, 0], minutes, (v) => setPower({ screenOff: v })),
+    pick('Sleep', power.sleep, [15, 30, 60, 120, 240, 0], minutes, (v) => setPower({ sleep: v })),
+  );
+  return rows;
+}
+
+async function setPower(change) {
+  const r = await api.system('power.set', change);
+  if (!r.ok) toast(r.error || 'Windows didn’t accept that');
+  refreshSection();
+}
+
+function accessRows() {
+  return [
+    pick('Text size', prefs.textSize, ['default', 'large', 'larger'], (v) => v.charAt(0).toUpperCase() + v.slice(1),
+      (v) => savePref('textSize', v)),
+    { kind: 'toggle', label: 'Reduce motion', on: prefs.reduceMotion, run: (on) => savePref('reduceMotion', on) },
+    { kind: 'toggle', label: 'High contrast', on: prefs.highContrast, run: (on) => savePref('highContrast', on) },
   ];
 }
 
@@ -783,8 +859,6 @@ function aboutRows(a) {
     { kind: 'info', label: 'On for', value: hours >= 24 ? `${Math.floor(hours / 24)} d ${hours % 24} h` : `${hours} h ${a.uptimeMinutes % 60} min` },
   ];
   if (repair.open) {
-    $('set-note').textContent = 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
-      + 'and gets the Windows desktop. Signing out there brings the TV back.';
     rows.push({ kind: 'choice', label: 'Repair mode', value: 'Windows desktop', options: [
       { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] });
   }
@@ -849,8 +923,6 @@ function updateRows(u) {
   }
   if (!busy(w)) rows.push({ kind: 'action', label: 'Check for Windows updates', value: '', press: () => startUpdate('windows-check', 'Checking for Windows updates') });
   if (w?.lastInstall) rows.push({ kind: 'info', label: 'Last Windows update', value: when(w.lastInstall) });
-  $('set-note').textContent = 'Windows installs its updates by itself too; “Install now” only does it sooner. '
-    + 'WinTV updates are checked every day, and switch in when no app is open.';
   return rows;
 }
 
@@ -910,7 +982,7 @@ function paintLock() {
 function wake() {
   if (!lock) return false;
   clearTimeout(lock.timer);
-  const askWho = lock.askWho || Date.now() - lock.since > lockCfg.askWhoAfterMinutes * 60000;
+  const askWho = prefs.askWhoMinutes > 0 && (lock.askWho || Date.now() - lock.since > prefs.askWhoMinutes * 60000);
   lock = null;
   touched();
   $('lock').classList.add('hidden');
@@ -921,10 +993,10 @@ function wake() {
 
 function watchIdle() {
   setInterval(() => {
-    if (lock || !(lockCfg.afterMinutes > 0)) return;
+    if (lock || !(prefs.screenSaverMinutes > 0)) return;
     // An app in front means someone is watching, not idling on the home screen.
     if (!document.hasFocus()) { touched(); return; }
-    if (Date.now() - lastInput > lockCfg.afterMinutes * 60000) showLock(false);
+    if (Date.now() - lastInput > prefs.screenSaverMinutes * 60000) showLock(false);
   }, 2000);
 }
 
@@ -933,7 +1005,7 @@ function watchIdle() {
   const state = await api.getState();
   profiles = state.profiles || [];
   active = state.profile;
-  lockCfg = { ...lockCfg, ...(state.lockScreen || {}) };
+  usePrefs(state.prefs);
   appVersion = state.version || '';
   build(state);
   setFocus(0, 0, true);
@@ -957,7 +1029,13 @@ function watchIdle() {
     if (settings) closeSettings();
     setFocus(pos.row, pos.col, true);
   });
-  api.onLock(() => showLock(true));
+  // The PC woke from sleep: the clock screen, and the next button asks who is
+  // watching. Without a screen saver, straight to "Who's watching?".
+  api.onLock(() => {
+    if (prefs.screenSaverMinutes > 0) showLock(true);
+    else if (prefs.askWhoMinutes > 0 && profiles.length > 1) openPicker();
+  });
+  api.onPrefs(usePrefs);
   api.onPicker(() => { if (lock) wake(); if (profiles.length > 1 && !picker) openPicker(); });
   if (profiles.length > 1) openPicker(); else paintMe();
   clock();

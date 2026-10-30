@@ -8,7 +8,7 @@
 // It must never quit on its own, must survive its own crashes, and is the
 // only way to start anything.
 
-const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen, systemPreferences } = require('electron');
 
 // First thing: an error while starting must end this process (the
 // supervisor then restarts it or rolls back), not leave Electron's
@@ -122,7 +122,7 @@ function publicState() {
     browser: config.browser ? path.basename(config.browser, '.exe') : null,
     user: os.userInfo().username,
     version: app.getVersion(),
-    lockScreen: config.lockScreen,
+    prefs,
   };
 }
 
@@ -230,6 +230,16 @@ function int(v, min, max) {
   return n;
 }
 
+function oneOf(v, list) {
+  if (!list.includes(v)) throw new Error('bad argument');
+  return v;
+}
+
+// Windows' own power timeouts while plugged in, in minutes (0 = never), as
+// Settings > Screen Saver offers them (D-31).
+const SCREEN_OFF_STEPS = [5, 10, 15, 30, 60, 120, 0];
+const IDLE_SLEEP_STEPS = [15, 30, 60, 120, 240, 0];
+
 const SYSTEM_OPS = {
   'display.get': () => ({}),
   'display.set': (a) => ({ width: int(a.width, 640, 15360), height: int(a.height, 480, 8640), hz: int(a.hz, 20, 1000) }),
@@ -237,6 +247,9 @@ const SYSTEM_OPS = {
   'audio.set': (a) => (a.volume !== undefined ? { volume: int(a.volume, 0, 100) } : { muted: a.muted === true }),
   'audio.key': (a) => { if (!['up', 'down', 'mute'].includes(a.key)) throw new Error('bad argument'); return { key: a.key }; },
   'network.get': () => ({}),
+  'power.get': () => ({}),
+  'power.set': (a) => (a.screenOff !== undefined ? { screenOff: oneOf(a.screenOff, SCREEN_OFF_STEPS) } : { sleep: oneOf(a.sleep, IDLE_SLEEP_STEPS) }),
+  'motion.set': (a) => ({ reduce: a.reduce === true }),
   about: () => ({}),
   'process.find': (a) => {
     const root = expand('${PROFILES}') + path.sep;
@@ -280,6 +293,64 @@ async function system(op, args) {
     helperWaiting.set(id, (msg) => { clearTimeout(timer); done(msg); });
     helper.stdin.write(JSON.stringify({ id, op, ...clean }) + '\n');
   });
+}
+
+// ---------------------------------------------------------------- preferences
+// WinTV's own settings, chosen in Settings: the screen saver, navigation
+// sounds and accessibility (D-31). They belong to the TV, not to a profile,
+// and live in %APPDATA%\WinTV\settings.json. Only the values listed here
+// are accepted; the site file's lockScreen gives the screen saver defaults.
+const PREFS = {
+  screenSaverMinutes: [2, 5, 10, 15, 30, 0], // idle minutes on the home screen; 0 = never
+  screenSaverStyle: ['colour', 'dark'],
+  askWhoMinutes: [15, 30, 60, 120, 0],       // waking after this long away asks who is watching; 0 = never
+  navSounds: ['off', 'soft', 'normal', 'loud'],
+  textSize: ['default', 'large', 'larger'],
+  reduceMotion: [false, true],
+  highContrast: [false, true],
+};
+let prefs = null;
+
+function prefsFile() {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+function loadPrefs() {
+  const saved = readJson(prefsFile()) || {};
+  prefs = {
+    screenSaverMinutes: config.lockScreen.afterMinutes,
+    screenSaverStyle: 'colour',
+    askWhoMinutes: config.lockScreen.askWhoAfterMinutes,
+    navSounds: 'normal',
+    textSize: 'default',
+    reduceMotion: false,
+    highContrast: false,
+  };
+  for (const [key, allowed] of Object.entries(PREFS)) if (allowed.includes(saved[key])) prefs[key] = saved[key];
+}
+
+async function setPref(key, value) {
+  if (!PREFS[key]?.includes(value)) return { ok: false, error: 'bad argument' };
+  if (key === 'reduceMotion' && IS_WIN) {
+    // Windows' "Animation effects" too: Brave and other apps read it as
+    // prefers-reduced-motion, so websites keep still as well.
+    const r = await system('motion.set', { reduce: value });
+    if (!r.ok) return { ok: false, error: r.error };
+    log('animation settings:', JSON.stringify(systemPreferences.getAnimationSettings?.() ?? null));
+  }
+  prefs = { ...prefs, [key]: value };
+  try {
+    const file = prefsFile();
+    fs.writeFileSync(file + '.tmp', JSON.stringify(prefs, null, 2));
+    fs.renameSync(file + '.tmp', file); // a crash mid-write keeps the old file
+  } catch (e) {
+    log('prefs: cannot save:', e.message);
+    return { ok: false, error: 'Could not save the setting' };
+  }
+  log('prefs:', key, String(value));
+  if (win && !win.isDestroyed()) win.webContents.send('prefs', prefs);
+  layerSend('prefs', prefs);
+  return { ok: true, result: prefs };
 }
 
 function quiet(file, args) {
@@ -437,6 +508,7 @@ function inputSend(req) {
 function onInput(msg) {
   if (msg.ev === 'key') {
     if (msg.k === 'home') onHomeKey(msg.down, msg.repeat);
+    else if (msg.k === 'quick') openQuick(); // the Windows key, held
     else if (['volup', 'voldown', 'mute'].includes(msg.k)) volumeKey(msg.k);
     else layerSend('key', { k: msg.k, repeat: msg.repeat });
   } else if (msg.ev === 'text') onTextFocus(msg);
@@ -512,6 +584,7 @@ function createLayer() {
   layer.removeMenu();
   layer.setIgnoreMouseEvents(true);
   layer.loadURL('wintv://ui/layer.html');
+  layer.webContents.on('did-finish-load', () => layerSend('prefs', prefs));
   layer.on('close', (e) => { if (!quitting) e.preventDefault(); });
   layer.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   layer.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -943,6 +1016,7 @@ if (SUPERVISE) {
   app.on('second-instance', () => goHome('second-instance'));
   app.whenReady().then(() => {
     config = loadConfig();
+    loadPrefs();
     log(`start v${app.getVersion()} user=${os.userInfo().username} browser=${config.browser || 'none'}`);
     session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     serveUi();
@@ -953,6 +1027,7 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:profile', fromHome((id) => setProfile(String(id))));
     ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
     ipcMain.handle('wintv:updates', fromHome((action, arg) => updates(String(action), arg)));
+    ipcMain.handle('wintv:pref', fromHome((key, value) => setPref(String(key), value)));
     layerIpc();
     if (config.profiles.length === 1) profile = config.profiles[0];
     // Waking the TV shows the lock screen; the next button asks who is watching.

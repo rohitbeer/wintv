@@ -7,6 +7,9 @@
 #   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}
 #   {"id":7,"op":"audio.key","key":"up"}           the remote's volume keys: up | down | mute
 #   {"id":5,"op":"network.get"}                    connections and their addresses
+#   {"id":9,"op":"power.get"}                      screen-off and sleep timeouts (plugged in), minutes
+#   {"id":10,"op":"power.set","screenOff":30}      or {"sleep":60}; 0 = never
+#   {"id":11,"op":"motion.set","reduce":true}      Windows' animation effects off (apps keep still)
 #   {"id":6,"op":"about"}                          Windows version, updates, uptime
 #   {"id":8,"op":"process.find","dir":"C:\\..."}   browser processes using this WinTV profile folder
 # Each op reads, or changes only the one setting it is named after. main.js
@@ -139,6 +142,19 @@ namespace WinTV {
             Marshal.ThrowExceptionForHR(Endpoint(out id).SetMute(muted, ref ctx));
         }
     }
+
+    // Windows' "Animation effects" (Settings > Accessibility > Visual effects),
+    // per user. Chromium-based apps, Brave included, report it to web pages as
+    // prefers-reduced-motion.
+    public static class Motion {
+        [DllImport("user32.dll", SetLastError = true)] static extern bool SystemParametersInfoW(uint action, uint param, IntPtr value, uint flags);
+        const uint SPI_SETCLIENTAREAANIMATION = 0x1043, SPIF_UPDATEINIFILE = 0x1, SPIF_SENDCHANGE = 0x2;
+
+        public static void Set(bool animate) {
+            if (!SystemParametersInfoW(SPI_SETCLIENTAREAANIMATION, 0, (IntPtr)(animate ? 1 : 0), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
 }
 '@
 
@@ -186,6 +202,31 @@ function Get-NetworkInfo {
     })
 }
 
+# The power plan's timeouts while plugged in. powercfg's labels are in the
+# display language, so the value is read by position: the last two numbers
+# of a setting are its plugged-in and battery values, in seconds.
+$PowerTimeouts = @{
+    screenOff = @('SUB_VIDEO', 'VIDEOIDLE', 'monitor-timeout-ac')
+    sleep     = @('SUB_SLEEP', 'STANDBYIDLE', 'standby-timeout-ac')
+}
+
+function Get-PowerInfo {
+    $info = @{}
+    foreach ($name in $PowerTimeouts.Keys) {
+        $t = $PowerTimeouts[$name]
+        $out = & "$env:SystemRoot\System32\powercfg.exe" /query SCHEME_CURRENT $t[0] $t[1]
+        if ($LASTEXITCODE) { throw "powercfg /query $($t[1]): exit $LASTEXITCODE" }
+        $hex = @([regex]::Matches(($out -join "`n"), '0x[0-9a-fA-F]{8}') | ForEach-Object { $_.Value })
+        $info[$name] = [int]([Convert]::ToInt64($hex[-2], 16) / 60)
+    }
+    $info
+}
+
+function Set-PowerTimeout([string]$Name, [int]$Minutes) {
+    $out = & "$env:SystemRoot\System32\powercfg.exe" /change $PowerTimeouts[$Name][2] $Minutes
+    if ($LASTEXITCODE) { throw "powercfg /change: $($out -join ' ')" }
+}
+
 function Get-About {
     $os = Get-CimInstance Win32_OperatingSystem
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -226,6 +267,13 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 Get-AudioInfo
             }
             'network.get' { @{ connections = @(Get-NetworkInfo) } }
+            'power.get'   { Get-PowerInfo }
+            'power.set'   {
+                if ($null -ne $req.screenOff) { Set-PowerTimeout 'screenOff' ([int]$req.screenOff) }
+                if ($null -ne $req.sleep) { Set-PowerTimeout 'sleep' ([int]$req.sleep) }
+                Get-PowerInfo
+            }
+            'motion.set'  { [WinTV.Motion]::Set(-not [bool]$req.reduce); @{ reduce = [bool]$req.reduce } }
             'about'       { Get-About }
             'process.find' {
                 # The browser's main process (no --type=) started with exactly this --user-data-dir.

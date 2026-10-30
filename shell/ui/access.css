@@ -1,0 +1,58 @@
+/* WinTV Settings > Accessibility, for both windows (D-31). Text size is the
+   --ts factor that style.css and layer.css multiply their text sizes by
+   (headline-size text, already big, stays as it is). */
+
+/* Reduce motion: nothing drifts, sways, bounces or slides in. Focus still
+   lifts and things still fade, the way tvOS does it. */
+body.reduce-motion { --spring: var(--ease); }
+body.reduce-motion .art,
+body.reduce-motion #info.swap,
+body.reduce-motion .card,
+body.reduce-motion #kb-echo .caret { animation: none !important; }
+body.reduce-motion #sheet.hidden .panel,
+body.reduce-motion #quick.hidden,
+body.reduce-motion #vol.hidden { transform: none; }
+body.reduce-motion #toast.hidden,
+body.reduce-motion #kb.hidden,
+body.reduce-motion #notice.hidden { transform: translateX(-50%); }
+/* Over apps nothing fades either: with Windows' animations off, a fade in
+   the system layer's window never starts, and its panels stayed invisible
+   (seen on the VM, D-31). */
+body.reduce-motion.layer * { transition: none !important; animation: none !important; }
+
+/* High contrast: white on black, solid panels with white edges, and a thick
+   yellow mark on whatever has the focus. */
+body.high-contrast { --dim: #fff; --glass: #000; --glass-edge: #fff; --edge: #fff; --panel: #000; }
+body.high-contrast .art,
+body.high-contrast .shade,
+body.high-contrast .lock-shade,
+body.high-contrast .card .sheen { display: none; }
+body.high-contrast #settings,
+body.high-contrast #sheet,
+body.high-contrast #picker,
+body.high-contrast #toast { background: #000; backdrop-filter: none; }
+body.high-contrast .card { box-shadow: inset 0 0 0 .3vh #fff; }
+body.high-contrast .tile.focused .card,
+body.high-contrast .face-btn.focused .avatar { box-shadow: 0 0 0 .8vh #ffd60a; }
+body.high-contrast .panel,
+body.high-contrast #sheet .panel,
+body.high-contrast #toast { background: #000; box-shadow: inset 0 0 0 .3vh #fff; }
+body.high-contrast .set-row,
+body.high-contrast .set-sec.current,
+body.high-contrast .choice,
+body.high-contrast .q-row,
+body.high-contrast .key,
+body.high-contrast .n-btn,
+body.high-contrast #kb-echo { background: #000; box-shadow: inset 0 0 0 .2vh #fff; }
+body.high-contrast .set-sec.focused,
+body.high-contrast .set-row.focused,
+body.high-contrast .choice.focused,
+body.high-contrast .q-row.focused,
+body.high-contrast .key.focused,
+body.high-contrast .n-btn.focused { background: #ffd60a; color: #000; box-shadow: none; }
+body.high-contrast .set-row.focused .set-value,
+body.high-contrast .q-row.focused .q-val,
+body.high-contrast .q-row.focused .q-note { color: #000; }
+body.high-contrast .bar,
+body.high-contrast .q-bar,
+body.high-contrast .vol-bar { background: #666; }

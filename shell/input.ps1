@@ -4,7 +4,7 @@
 # shell owns them, in every app, the way a TV's own buttons work.
 #
 # Out (one JSON object per line):
-#   {"ev":"key","k":"home","down":true,"repeat":false}   home | volup | voldown | mute
+#   {"ev":"key","k":"home","down":true,"repeat":false}   home | quick | volup | voldown | mute (quick = the Windows key held)
 #   {"ev":"key","k":"left","down":true,"repeat":false}   left|right|up|down|ok|back, only while grabbed
 #   {"ev":"text","on":true,"password":false,"pid":123}   a text field got (or lost) the focus, in any app
 #   {"ev":"hwtype"}                                       someone typed on a real keyboard (which key is never sent)
@@ -76,6 +76,8 @@ namespace WinTV {
         static long grabUsed;           // last time a grabbed key arrived (ticks)
         static readonly bool[] held = new bool[256];
         static int homeVk;              // which key started the current Home press (0 = none)
+        static bool winAlone;           // the Windows key is down and nothing else was pressed with it
+        static long winAt;
         static long lastTyping;
         static Timer grabTimer;
 
@@ -137,6 +139,21 @@ namespace WinTV {
                 if (!down && msg != WM_KEYUP && msg != WM_SYSKEYUP) return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
                 bool repeat = down && held[k.vk];
                 held[k.vk] = down;
+
+                // The Windows key on its own is Home on a keyboard (the TV has no
+                // Start menu): tap = home screen, hold = quick settings, told apart
+                // when it is let go (600 ms, as main.js's HOLD_MS). Pressed with
+                // another key it stays Windows' (Win+L still locks).
+                if (k.vk == VK_LWIN || k.vk == VK_RWIN) {
+                    if (down && !repeat) { winAlone = true; winAt = DateTime.UtcNow.Ticks; }
+                    else if (!down && winAlone) {
+                        winAlone = false;
+                        if (DateTime.UtcNow.Ticks - winAt < TimeSpan.FromMilliseconds(600).Ticks) { Key("home", true, false); Key("home", false, false); }
+                        else Key("quick", true, false);
+                    }
+                    return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                }
+                if (down) winAlone = false;
 
                 // Home: the remote's Home key, or Win+Esc / Ctrl+Alt+H on a keyboard.
                 // Down and up both go out; main.js tells a tap (home) from a hold (quick settings).

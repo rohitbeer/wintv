@@ -6,8 +6,9 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
   <title>WinTV system layer</title>
   <link rel="stylesheet" href="layer.css">
+  <link rel="stylesheet" href="access.css">
 </head>
-<body>
+<body class="layer">
   <aside id="quick" class="panel hidden" role="dialog" aria-label="Quick settings">
     <div class="q-head">
       <div id="q-time"></div>
@@ -37,6 +38,7 @@
     <div id="n-buttons"></div>
   </section>
 
+  <script src="prefs.js"></script>
   <script src="layer.js"></script>
 </body>
 </html>

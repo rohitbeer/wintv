@@ -18,7 +18,7 @@ hidden repair mode for the admin.
 
 | path | what |
 |---|---|
-| `shell/` | the WinTV shell (Electron), in place of Explorer. `main.js` = windows, apps, power, sleep timer; `input.ps1` = the remote's Home/volume keys and the keyboard's typing; `system.ps1` = what Settings may change in Windows; `ui/index.html` = home screen, Settings, "Who's watching?", clock screen; `ui/layer.html` = the system layer over every app (quick settings, keyboard, volume); `apps.default.json` = apps, profiles, keys |
+| `shell/` | the WinTV shell (Electron), in place of Explorer. `main.js` = windows, apps, power, sleep timer; `input.ps1` = the remote's Home/volume keys and the keyboard's typing; `system.ps1` = what Settings may change in Windows; `ui/index.html` = home screen, Settings, "Who's watching?", clock screen; `ui/layer.html` = the system layer over every app (quick settings, keyboard, volume); `ui/prefs.js` + `ui/access.css` = text size, contrast, reduce motion and sounds for both; `apps.default.json` = apps, profiles, keys |
 | `sites/example.json` | example household site file: profiles, extra tiles, language and time zone. Your own copy stays outside the repo |
 | `payload/wintv/setup/` | what Windows runs during setup: `specialize.ps1`, `keep-apps.txt`, policies, first-logon and boot scripts |
 | `build/build-payload.sh` | builds the payload (Linux, in the build container) |
@@ -92,8 +92,8 @@ release `vX.Y.Z`).
 | Enter / A | open |
 | hold Enter / Y / Menu | app menu (quit a running app) |
 | Back, Esc / B | back |
-| Home (`BrowserHome`, Win+Esc, Ctrl+Alt+H) | back to the home screen, from any app |
-| hold Home (or Ctrl+Alt+Q) | quick settings, over any app: volume, mute, sleep timer, keyboard, picture off, who's watching |
+| Home (`BrowserHome`; on a keyboard the Windows key, Win+Esc or Ctrl+Alt+H) | back to the home screen, from any app |
+| hold Home (or the Windows key, or Ctrl+Alt+Q) | quick settings, over any app: volume, mute, sleep timer, keyboard, picture off, who's watching |
 | volume up / down / mute | volume, shown over any app |
 | a text field gets the focus | the on-screen keyboard comes up (arrows + OK to type, Back to hide) |
 | Power tile | sleep, restart, shut down, switch profile |

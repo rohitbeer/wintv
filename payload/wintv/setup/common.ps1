@@ -142,7 +142,11 @@ function Set-TvShell([string]$Version) {
     if (-not $sid) { return }
     $value = "`"$env:ProgramFiles\WinTV\versions\$Version\WinTV.exe`" --supervise"
     $loaded = Test-Path "Registry::HKEY_USERS\$sid"
-    if (-not $loaded) { Invoke-Native "$env:SystemRoot\System32\reg.exe" @('load', "HKU\$sid", (Join-Path (Split-Path $env:PUBLIC) 'tv\NTUSER.DAT')) | Out-Null }
+    $hive = Join-Path (Split-Path $env:PUBLIC) 'tv\NTUSER.DAT'
+    # The boot task of a new install runs before tv has ever signed in: no
+    # profile yet, and firstlogon.ps1 sets the shell at that first sign-in.
+    if (-not $loaded -and -not (Test-Path $hive)) { Write-Log '  tv has not signed in yet; its first sign-in sets the shell'; return }
+    if (-not $loaded) { Invoke-Native "$env:SystemRoot\System32\reg.exe" @('load', "HKU\$sid", $hive) | Out-Null }
     try {
         $k = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
         if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }

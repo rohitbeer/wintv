@@ -26,27 +26,12 @@ const $ = (id) => document.getElementById(id);
 // Outside Electron (design work in a plain browser): ?show=quick|keyboard|volume|notice
 const preview = !window.wintvLayer;
 const api = window.wintvLayer || {
-  onShow: () => {}, onHide: () => {}, onKey: () => {},
+  onShow: () => {}, onHide: () => {}, onKey: () => {}, onPrefs: () => {},
   close: () => {}, type: async () => ({ ok: true }), key: async () => ({ ok: true }),
   action: async (name, arg) => ({ ok: true, result: name === 'sleep-timer' ? { minutes: arg, at: arg ? Date.now() + arg * 60000 : 0 } : {} }),
 };
 
-// ------------------------------------------------------------------ sound
-let audio = null;
-function tone(freq, ms, gain) {
-  try {
-    audio ||= new AudioContext();
-    const o = audio.createOscillator();
-    const g = audio.createGain();
-    o.type = 'triangle';
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(gain, audio.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + ms / 1000);
-    o.connect(g).connect(audio.destination);
-    o.start();
-    o.stop(audio.currentTime + ms / 1000);
-  } catch { /* no audio device is fine */ }
-}
+// ------------------------------------------------------------------ sound (tone: prefs.js)
 const tick = () => tone(1900, 28, 0.02);
 const click = () => tone(1300, 35, 0.025);
 
@@ -84,6 +69,7 @@ function key(k, repeat) {
 api.onShow(({ surface, data }) => show(surface, data));
 api.onHide((name) => hide(name, false));
 api.onKey(({ k, repeat }) => key(k, repeat));
+api.onPrefs(applyLook); // text size, contrast, motion and sounds, as chosen in Settings
 
 // Only when this window has the focus: a plain browser, or a Linux test run.
 const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Enter: 'ok', Escape: 'back', Backspace: 'back', BrowserBack: 'back' };
@@ -479,6 +465,7 @@ function noticeKey(k) {
 if (preview) {
   document.body.classList.add('preview');
   const q = new URLSearchParams(location.search);
+  applyLook({ textSize: q.get('text') || 'default', reduceMotion: q.has('still'), highContrast: q.has('contrast'), navSounds: 'normal' });
   const audioState = { present: true, device: 'LG TV', volume: 36, muted: false };
   for (const name of (q.get('show') || 'quick').split(',')) {
     if (name === 'quick') show('quick', { audio: audioState, sleep: { minutes: 30, at: Date.now() + 27 * 60000 }, appInFront: true, profiles: true });

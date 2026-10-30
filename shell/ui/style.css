@@ -76,7 +76,7 @@ header {
   display: flex;
   align-items: center;
   gap: 1.6vw;
-  font-size: 3.3vh;
+  font-size: calc(3.3vh * var(--ts, 1));
   font-weight: 600;
   letter-spacing: .02em;
   text-shadow: 0 .3vh 1.5vh rgba(0,0,0,.4);
@@ -95,7 +95,7 @@ header {
   to   { opacity: 1; transform: none; }
 }
 #eyebrow {
-  font-size: 1.75vh;
+  font-size: calc(1.75vh * var(--ts, 1));
   font-weight: 650;
   letter-spacing: .18em;
   text-transform: uppercase;
@@ -111,7 +111,7 @@ header {
 }
 #tagline {
   margin: 2vh 0 0;
-  font-size: 2.6vh;
+  font-size: calc(2.6vh * var(--ts, 1));
   line-height: 1.35;
   color: var(--dim);
 }
@@ -212,7 +212,7 @@ header {
   right: 0;
   top: calc(100% + 2.6vh);
   text-align: center;
-  font-size: 2vh;
+  font-size: calc(2vh * var(--ts, 1));
   font-weight: 600;
   opacity: 0;
   transform: translateY(-.8vh);
@@ -267,7 +267,7 @@ header {
   transition: transform .35s var(--spring);
 }
 #sheet.hidden .panel { transform: scale(.94); }
-#sheet h2 { margin: 0 0 2.4vh; font-size: 3.4vh; font-weight: 650; text-align: center; }
+#sheet h2 { margin: 0 0 2.4vh; font-size: calc(3.4vh * var(--ts, 1)); font-weight: 650; text-align: center; }
 #sheet-items {
   display: flex;
   flex-direction: column;
@@ -283,7 +283,7 @@ header {
   border-radius: 1.4vh;
   padding: 1.8vh 2vw;
   font: inherit;
-  font-size: 2.6vh;
+  font-size: calc(2.6vh * var(--ts, 1));
   font-weight: 600;
   text-align: center;
   color: var(--text);
@@ -311,7 +311,7 @@ header {
 }
 #picker.hidden { opacity: 0; pointer-events: none; }
 .who { font-size: 5.4vh; font-weight: 700; letter-spacing: -.01em; }
-.who-hint { font-size: 2vh; color: var(--dim); }
+.who-hint { font-size: calc(2vh * var(--ts, 1)); color: var(--dim); }
 #faces { display: flex; gap: 4vw; }
 .face-btn {
   border: 0;
@@ -342,9 +342,9 @@ header {
   transform: translateY(-1vh) scale(1.14);
   box-shadow: 0 3vh 6vh rgba(0,0,0,.6), 0 0 0 .5vh rgba(255,255,255,.9);
 }
-.who-name { font-size: 2.6vh; font-weight: 600; color: var(--dim); transition: color .3s; }
+.who-name { font-size: calc(2.6vh * var(--ts, 1)); font-weight: 600; color: var(--dim); transition: color .3s; }
 .face-btn.focused .who-name { color: var(--text); }
-.avatar.mini { width: 4.6vh; height: 4.6vh; font-size: 2.2vh; box-shadow: 0 .5vh 1.5vh rgba(0,0,0,.35); }
+.avatar.mini { width: 4.6vh; height: 4.6vh; font-size: calc(2.2vh * var(--ts, 1)); box-shadow: 0 .5vh 1.5vh rgba(0,0,0,.35); }
 
 /* ------------------------------------------------------------ toast */
 #toast {
@@ -358,7 +358,7 @@ header {
   background: rgba(30,30,34,.8);
   box-shadow: inset 0 0 0 1px var(--glass-edge);
   backdrop-filter: blur(3vh);
-  font-size: 2.2vh;
+  font-size: calc(2.2vh * var(--ts, 1));
   font-weight: 600;
   transition: opacity .3s, transform .4s var(--spring);
 }
@@ -402,18 +402,22 @@ header {
   letter-spacing: -.02em;
   font-variant-numeric: tabular-nums;
 }
-#lock-date { margin-top: 1.6vh; font-size: 3.2vh; font-weight: 500; color: var(--dim); }
+#lock-date { margin-top: 1.6vh; font-size: calc(3.2vh * var(--ts, 1)); font-weight: 500; color: var(--dim); }
 #lock-hint {
   position: absolute;
   left: 50%;
   bottom: 4vh;
   transform: translateX(-50%);
-  font-size: 2vh;
+  font-size: calc(2vh * var(--ts, 1));
   color: var(--dim);
   opacity: 0;
 }
 #lock:not(.hidden) #lock-hint { animation: hint 7s var(--ease) .8s both; }
 @keyframes hint { 0% { opacity: 0; } 12% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+/* "Clock on black" (Settings > Screen Saver): no colour, a dimmer clock; kindest to OLED. */
+#lock.dark .art { display: none; }
+#lock.dark #lock-time { color: rgba(245, 245, 247, .62); }
+#lock.dark #lock-date { color: rgba(245, 245, 247, .42); }
 
 /* ------------------------------------------------------------ settings
    WinTV's own Settings. Sits under the sheets (z 10), so choices open on top. */
@@ -432,7 +436,7 @@ header {
 #settings.hidden { opacity: 0; pointer-events: none; }
 .set-side { padding: 11vh 0 0 7vw; }
 .set-title { font-size: 6vh; font-weight: 700; letter-spacing: -.01em; margin-bottom: 5vh; }
-#set-sections { display: flex; flex-direction: column; gap: 1.2vh; width: 22vw; }
+#set-sections { display: flex; flex-direction: column; gap: 1.2vh; width: 24vw; }
 .set-sec, .set-row {
   border: 0;
   font: inherit;
@@ -443,12 +447,12 @@ header {
   border-radius: 1.4vh;
   transition: background .2s, color .2s, transform .3s var(--spring);
 }
-.set-sec { display: flex; align-items: center; gap: 1.6vw; padding: 1.6vh 1.4vw; font-size: 2.8vh; font-weight: 600; }
-.set-sec svg { width: 3.4vh; height: 3.4vh; }
+.set-sec { display: flex; align-items: center; gap: 1.6vw; padding: 1.6vh 1.4vw; font-size: calc(2.8vh * var(--ts, 1)); font-weight: 600; white-space: nowrap; }
+.set-sec svg { width: calc(3.4vh * var(--ts, 1)); height: calc(3.4vh * var(--ts, 1)); flex: none; }
 .set-sec.current { color: var(--text); background: rgba(255, 255, 255, .08); }
 .set-sec.focused, .set-row.focused { background: #f5f5f7; color: #111; transform: scale(1.03); }
 .set-main { padding: 11vh 8vw 0 3vw; }
-#set-heading { margin: 0 0 4vh; font-size: 3.4vh; font-weight: 600; color: var(--dim); }
+#set-heading { margin: 0 0 4vh; font-size: calc(3.4vh * var(--ts, 1)); font-weight: 600; color: var(--dim); }
 #set-rows { display: flex; flex-direction: column; gap: 1vh; }
 .set-row {
   display: flex;
@@ -457,17 +461,17 @@ header {
   gap: 2vw;
   min-height: 8vh;
   padding: 1.4vh 1.6vw;
-  font-size: 2.7vh;
+  font-size: calc(2.7vh * var(--ts, 1));
   font-weight: 600;
   color: var(--text);
   background: rgba(255, 255, 255, .06);
 }
 .set-value { color: var(--dim); font-weight: 500; text-align: right; display: flex; align-items: center; gap: 1.2vw; }
 .set-row.focused .set-value { color: #333; }
-.set-row.choice .set-value::after { content: '›'; font-size: 3.4vh; line-height: 1; }
-.set-row.action .set-value::after { content: '›'; font-size: 3.4vh; line-height: 1; }
+.set-row.choice .set-value::after { content: '›'; font-size: calc(3.4vh * var(--ts, 1)); line-height: 1; }
+.set-row.action .set-value::after { content: '›'; font-size: calc(3.4vh * var(--ts, 1)); line-height: 1; }
 .bar { position: relative; width: 22vw; height: 1vh; border-radius: 1vh; background: rgba(255, 255, 255, .18); overflow: hidden; }
 .set-row.focused .bar { background: rgba(0, 0, 0, .14); }
 .fill { position: absolute; inset: 0 auto 0 0; border-radius: 1vh; background: currentColor; transition: width .15s var(--ease); }
 .num { min-width: 3.5vw; text-align: right; font-variant-numeric: tabular-nums; }
-#set-note { margin-top: 4vh; max-width: 46vw; font-size: 2vh; line-height: 1.5; color: var(--dim); }
+#set-note { margin-top: 4vh; max-width: 46vw; font-size: calc(2vh * var(--ts, 1)); line-height: 1.5; color: var(--dim); }
