@@ -27,6 +27,18 @@
 
   <main id="rows"></main>
 
+  <div id="settings" class="hidden" role="dialog" aria-modal="true">
+    <div class="set-side">
+      <div class="set-title">Settings</div>
+      <div id="set-sections"></div>
+    </div>
+    <div class="set-main">
+      <h2 id="set-heading"></h2>
+      <div id="set-rows"></div>
+      <p id="set-note"></p>
+    </div>
+  </div>
+
   <div id="sheet" class="hidden" role="dialog" aria-modal="true">
     <div class="panel">
       <h2 id="sheet-title"></h2>
@@ -38,6 +50,17 @@
     <div class="who">Who’s watching?</div>
     <div id="faces"></div>
     <div class="who-hint">Each profile keeps its own app sign-ins.</div>
+  </div>
+
+  <div id="lock" class="hidden" data-spot="0" aria-hidden="true">
+    <div class="art" id="lock-a"></div>
+    <div class="art" id="lock-b"></div>
+    <div class="lock-shade"></div>
+    <div id="lock-clock">
+      <div id="lock-time"></div>
+      <div id="lock-date"></div>
+    </div>
+    <div id="lock-hint">Press any button</div>
   </div>
 
   <div id="toast" class="hidden"></div>

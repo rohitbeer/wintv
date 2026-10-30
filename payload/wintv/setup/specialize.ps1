@@ -5,14 +5,6 @@ $Stage = 'specialize'
 $Config = Get-Content (Join-Path $Payload 'build.json') -Raw | ConvertFrom-Json
 Write-Log "WinTV $($Config.version) variant=$($Config.variant) built=$($Config.built)"
 
-Invoke-Step 'device region = EEA' {
-    # The GeoID of an EEA country. Decides which Digital Markets Act choices Windows
-    # offers, including uninstalling Edge.
-    $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion'
-    New-Item -Path $k -Force | Out-Null
-    Set-ItemProperty $k -Name DeviceRegion -Value 68 -Type DWord
-}
-
 Invoke-Step 'remove provisioned apps (allow-list)' {
     $keep = Get-Content "$PSScriptRoot\keep-apps.txt" | Where-Object { $_ -and -not $_.StartsWith('#') }
     foreach ($pkg in Get-AppxProvisionedPackage -Online) {
@@ -58,10 +50,15 @@ Invoke-Step 'install browser' {
         throw "refusing $($file.Name): signature is not a valid '$($Config.browserSigner)' signature"
     }
     if ($file.Extension -eq '.msi') {
-        Invoke-Native "$env:SystemRoot\System32\msiexec.exe" @('/i', "`"$($file.FullName)`"", '/qn', '/norestart') | Out-Null
+        Invoke-Native "$env:SystemRoot\System32\msiexec.exe" @('/i', $file.FullName, '/qn', '/norestart') -OkCodes @(0, 3010) | Out-Null
     } else {
-        Invoke-Native $file.FullName @() | Out-Null
+        # Brave's installer: no window, install now. Run as SYSTEM it installs
+        # for every account, with its updater.
+        Invoke-Native $file.FullName @('/silent', '/install') | Out-Null
     }
+    $exe = "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe"
+    if (-not (Test-Path $exe)) { throw "brave.exe is not in Program Files after install" }
+    Write-Log "  $exe"
 }
 
 Invoke-Step 'default browser for new accounts' {
@@ -78,7 +75,11 @@ Invoke-Step 'install the WinTV launcher' {
 }
 
 Invoke-Step 'optional features: Recall off' {
-    Invoke-Native "$env:SystemRoot\System32\dism.exe" @('/Online', '/Disable-Feature', '/FeatureName:Recall', '/NoRestart', '/Quiet') | Out-Null
+    # Only Copilot+ PCs have Recall as a feature; elsewhere there is nothing to turn off.
+    $recall = Get-WindowsOptionalFeature -Online -FeatureName Recall -ErrorAction SilentlyContinue
+    if (-not $recall -or $recall.State -eq 'Disabled') { Write-Log '  Recall not present or already off'; return }
+    # 3010 = done, restart needed (setup restarts anyway).
+    Invoke-Native "$env:SystemRoot\System32\dism.exe" @('/Online', '/Disable-Feature', '/FeatureName:Recall', '/NoRestart', '/Quiet') -OkCodes @(0, 3010) | Out-Null
 }
 
 Invoke-Step 'services: telemetry off' {
@@ -89,6 +90,11 @@ Invoke-Step 'services: telemetry off' {
 
 Invoke-Step 'power and boot: quiet, straight to the TV' {
     Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/hibernate', 'off') | Out-Null
+    # Screen off after 30 idle minutes, sleep after 60 (plugged in; half that
+    # on battery). The launcher's lock screen comes first, after 5 minutes.
+    foreach ($t in @(@('monitor-timeout-ac', 30), @('standby-timeout-ac', 60), @('monitor-timeout-dc', 15), @('standby-timeout-dc', 30))) {
+        Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/change', $t[0], [string]$t[1]) | Out-Null
+    }
     # No password prompt when the TV wakes up (tv has no password anyway).
     Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/SETACVALUEINDEX', 'SCHEME_CURRENT', 'SUB_NONE', 'CONSOLELOCK', '0') | Out-Null
     Invoke-Native "$env:SystemRoot\System32\powercfg.exe" @('/SETDCVALUEINDEX', 'SCHEME_CURRENT', 'SUB_NONE', 'CONSOLELOCK', '0') | Out-Null
@@ -98,7 +104,7 @@ Invoke-Step 'power and boot: quiet, straight to the TV' {
     }
 }
 
-Invoke-Step 'boot task: keep autologon and Edge removal in place' {
+Invoke-Step 'boot task + SetupComplete' {
     Invoke-Native "$env:SystemRoot\System32\schtasks.exe" @('/Create', '/F', '/TN', 'WinTV\Maintain', '/RU', 'SYSTEM',
         '/SC', 'ONSTART', '/RL', 'HIGHEST', '/TR',
         "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$Payload\setup\maintain.ps1`"") | Out-Null
@@ -117,10 +123,12 @@ if ($Config.variant -eq 'usb') {
 }
 
 if ($Config.variant -eq 'vm') {
-    Invoke-Step 'VM test tooling: virtio-serial driver + QEMU guest agent' {
+    Invoke-Step 'VM test tooling: virtio-serial driver' {
         $t = Join-Path $Payload 'test'
-        Invoke-Native "$env:SystemRoot\System32\pnputil.exe" @('/add-driver', "$t\vioserial\vioser.inf", '/install') | Out-Null
-        Invoke-Native "$env:SystemRoot\System32\msiexec.exe" @('/i', "`"$t\qemu-ga-x86_64.msi`"", '/qn', '/norestart') | Out-Null
+        # pnputil: 3010 = installed, restart needed; 259 = staged, no device updated yet.
+        Invoke-Native "$env:SystemRoot\System32\pnputil.exe" @('/add-driver', "$t\vioserial\vioser.inf", '/install') -OkCodes @(0, 259, 3010) | Out-Null
+        Invoke-Native "$env:SystemRoot\System32\pnputil.exe" @('/add-driver', "$t\viogpudo\viogpudo.inf", '/install') -OkCodes @(0, 259, 3010) | Out-Null
+        # The agent itself is installed by setupcomplete.ps1.
     }
 }
 

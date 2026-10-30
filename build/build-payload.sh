@@ -17,11 +17,15 @@ cp -r "$ROOT/launcher/dist/WinTV-win32-x64" "$OUT/launcher"
 
 echo "== setup scripts, site '$SITE'"
 cp -r "$ROOT/payload/wintv/setup" "$OUT/setup"
+mkdir -p "$OUT/art" && cp "$ROOT/payload/wintv/art/lockscreen.jpg" "$OUT/art/"
 if [ -f "$ROOT/sites/$SITE.json" ]; then cp "$ROOT/sites/$SITE.json" "$OUT/config/apps.json"; fi
 
 echo "== browser: Brave (latest release, hash checked against GitHub)"
 tag=$(gh api repos/brave/brave-browser/releases/latest --jq .tag_name)
-asset=BraveBrowserStandaloneSilentSetup.exe
+# The full standalone installer is tagged needsadmin=prefers: run as SYSTEM it
+# installs for every account into Program Files. (The "Silent" one is tagged
+# needsadmin=False and installed into SYSTEM's own profile on the first VM run.)
+asset=BraveBrowserStandaloneSetup.exe
 want=$(gh api repos/brave/brave-browser/releases/latest --jq ".assets[] | select(.name==\"$asset\") | .digest" | sed 's/^sha256://')
 dir=$CACHE/brave-$tag
 if [ ! -f "$dir/$asset" ]; then
@@ -41,9 +45,13 @@ if [ "$VARIANT" = vm ]; then
     mv "$vdir/virtio-win.iso.part" "$vdir/virtio-win.iso"
   fi
   rm -rf "$vdir/x" && mkdir -p "$vdir/x"
-  bsdtar -xf "$vdir/virtio-win.iso" -C "$vdir/x" vioserial/2k25/amd64 vioserial/w11/amd64 guest-agent/qemu-ga-x86_64.msi  # w11 files are hard links into 2k25
-  mkdir -p "$OUT/test/vioserial"
+  # w11 files are hard links into 2k25, so both are extracted. viogpudo is the
+  # virtio display driver: unlike Windows' basic display driver it offers
+  # several resolutions, which the Settings > Display test needs.
+  bsdtar -xf "$vdir/virtio-win.iso" -C "$vdir/x" vioserial/2k25/amd64 vioserial/w11/amd64 viogpudo/2k25/amd64 viogpudo/w11/amd64 guest-agent/qemu-ga-x86_64.msi
+  mkdir -p "$OUT/test/vioserial" "$OUT/test/viogpudo"
   cp "$vdir"/x/vioserial/w11/amd64/* "$OUT/test/vioserial/"
+  cp "$vdir"/x/viogpudo/w11/amd64/* "$OUT/test/viogpudo/"
   cp "$vdir/x/guest-agent/qemu-ga-x86_64.msi" "$OUT/test/"
 fi
 

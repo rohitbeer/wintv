@@ -9,7 +9,13 @@
 ^Microsoft\.WindowsAppRuntime
 ^Microsoft\.Services\.Store\.Engagement$
 
-# winget, used by the admin to add apps without the Store
+# The Microsoft Store (D-12). It installs the
+# Netflix/Prime Video/Disney+ apps, and it keeps every app below updated,
+# codecs included. Purchase/sign-in dialogs live in StorePurchaseApp.
+^Microsoft\.WindowsStore$
+^Microsoft\.StorePurchaseApp$
+
+# winget, used by the admin to add apps from the command line
 ^Microsoft\.DesktopAppInstaller$
 ^Microsoft\.Winget\.
 

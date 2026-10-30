@@ -6,6 +6,8 @@ OUT=${1:-/tmp/wintv-$ID.png}
 PPM=$(mktemp --suffix .ppm)
 trap 'rm -f "$PPM"' EXIT
 echo "screendump $PPM" | qm monitor "$ID" >/dev/null
+# QEMU writes the dump asynchronously; wait until the file stops growing.
+prev=-1; for _ in $(seq 1 50); do cur=$(stat -c %s "$PPM"); [ "$cur" -gt 0 ] && [ "$cur" = "$prev" ] && break; prev=$cur; sleep 0.1; done
 python3 - "$PPM" "$OUT" <<'PY'
 import sys, zlib, struct
 data = open(sys.argv[1], 'rb').read()

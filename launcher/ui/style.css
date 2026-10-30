@@ -268,7 +268,16 @@ header {
 }
 #sheet.hidden .panel { transform: scale(.94); }
 #sheet h2 { margin: 0 0 2.4vh; font-size: 3.4vh; font-weight: 650; text-align: center; }
-#sheet-items { display: flex; flex-direction: column; gap: 1.1vh; }
+#sheet-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1vh;
+  max-height: 66vh;
+  overflow-y: auto;
+  padding: .6vh 1vw;   /* room for the focused choice to grow */
+  margin: 0 -1vw;
+  scrollbar-width: none;
+}
 .choice {
   border: 0;
   border-radius: 1.4vh;
@@ -354,3 +363,110 @@ header {
   transition: opacity .3s, transform .4s var(--spring);
 }
 #toast.hidden { opacity: 0; transform: translate(-50%, 2vh); }
+
+/* ------------------------------------------------------------ lock screen
+   What the TV shows when nobody is using it: a big clock over slowly
+   drifting colour. The clock changes corner every couple of minutes so
+   nothing stays in one place long enough to burn into an OLED panel. */
+#lock {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: #000;
+  cursor: none;
+  transition: opacity 1.2s var(--ease);
+}
+#lock.hidden { opacity: 0; pointer-events: none; }
+#lock .art { animation-duration: 70s; transition-duration: 4s; }
+.lock-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(90% 70% at 15% 100%, rgba(0, 0, 0, .55) 0%, transparent 70%),
+    radial-gradient(90% 70% at 85% 0%, rgba(0, 0, 0, .45) 0%, transparent 70%);
+}
+#lock-clock {
+  position: absolute;
+  text-shadow: 0 .6vh 3vh rgba(0, 0, 0, .35);
+  transition: opacity 1.2s var(--ease);
+}
+#lock-clock.moving { opacity: 0; }
+#lock[data-spot="0"] #lock-clock { left: 7vw; bottom: 9vh; }
+#lock[data-spot="1"] #lock-clock { right: 7vw; top: 9vh; text-align: right; }
+#lock[data-spot="2"] #lock-clock { right: 7vw; bottom: 9vh; text-align: right; }
+#lock[data-spot="3"] #lock-clock { left: 7vw; top: 9vh; }
+#lock-time {
+  font-size: 17vh;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+#lock-date { margin-top: 1.6vh; font-size: 3.2vh; font-weight: 500; color: var(--dim); }
+#lock-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 4vh;
+  transform: translateX(-50%);
+  font-size: 2vh;
+  color: var(--dim);
+  opacity: 0;
+}
+#lock:not(.hidden) #lock-hint { animation: hint 7s var(--ease) .8s both; }
+@keyframes hint { 0% { opacity: 0; } 12% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ------------------------------------------------------------ settings
+   WinTV's own Settings. Sits under the sheets (z 10), so choices open on top. */
+#settings {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: 34vw 1fr;
+  background:
+    radial-gradient(60% 70% at 15% 20%, rgba(94, 92, 230, .22) 0%, transparent 70%),
+    rgba(6, 6, 9, .92);
+  backdrop-filter: blur(5vh) saturate(1.2);
+  transition: opacity .35s var(--ease);
+}
+#settings.hidden { opacity: 0; pointer-events: none; }
+.set-side { padding: 11vh 0 0 7vw; }
+.set-title { font-size: 6vh; font-weight: 700; letter-spacing: -.01em; margin-bottom: 5vh; }
+#set-sections { display: flex; flex-direction: column; gap: 1.2vh; width: 22vw; }
+.set-sec, .set-row {
+  border: 0;
+  font: inherit;
+  color: var(--dim);
+  background: transparent;
+  outline: none;
+  text-align: left;
+  border-radius: 1.4vh;
+  transition: background .2s, color .2s, transform .3s var(--spring);
+}
+.set-sec { display: flex; align-items: center; gap: 1.6vw; padding: 1.6vh 1.4vw; font-size: 2.8vh; font-weight: 600; }
+.set-sec svg { width: 3.4vh; height: 3.4vh; }
+.set-sec.current { color: var(--text); background: rgba(255, 255, 255, .08); }
+.set-sec.focused, .set-row.focused { background: #f5f5f7; color: #111; transform: scale(1.03); }
+.set-main { padding: 11vh 8vw 0 3vw; }
+#set-heading { margin: 0 0 4vh; font-size: 3.4vh; font-weight: 600; color: var(--dim); }
+#set-rows { display: flex; flex-direction: column; gap: 1vh; }
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2vw;
+  min-height: 8vh;
+  padding: 1.4vh 1.6vw;
+  font-size: 2.7vh;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, .06);
+}
+.set-value { color: var(--dim); font-weight: 500; text-align: right; display: flex; align-items: center; gap: 1.2vw; }
+.set-row.focused .set-value { color: #333; }
+.set-row.choice .set-value::after { content: '›'; font-size: 3.4vh; line-height: 1; }
+.bar { position: relative; width: 22vw; height: 1vh; border-radius: 1vh; background: rgba(255, 255, 255, .18); overflow: hidden; }
+.set-row.focused .bar { background: rgba(0, 0, 0, .14); }
+.fill { position: absolute; inset: 0 auto 0 0; border-radius: 1vh; background: currentColor; transition: width .15s var(--ease); }
+.num { min-width: 3.5vw; text-align: right; font-variant-numeric: tabular-nums; }
+#set-note { margin-top: 4vh; max-width: 46vw; font-size: 2vh; line-height: 1.5; color: var(--dim); }

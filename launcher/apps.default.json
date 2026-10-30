@@ -1,5 +1,5 @@
 {
-  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; power = power menu.",
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching.",
   "browserCandidates": [
     "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -8,11 +8,14 @@
     "%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe"
   ],
   "homeKeys": [
-    "BrowserHome",
     "Control+Escape",
     "Super+Escape",
     "Control+Alt+H"
   ],
+  "lockScreen": {
+    "afterMinutes": 5,
+    "askWhoAfterMinutes": 30
+  },
   "profiles": [
     {
       "id": "home",
@@ -53,8 +56,9 @@
       "kind": "web",
       "glyph": "tv",
       "eyebrow": "Stream",
-      "tagline": "Browser playback: Netflix caps Chromium browsers at 720p.",
+      "tagline": "Films and series, in the browser.",
       "url": "https://www.netflix.com/browse",
+      "drm": true,
       "colors": [
         "#e50914",
         "#2b0a0c"
@@ -68,6 +72,7 @@
       "eyebrow": "Stream",
       "tagline": "Movies and series from Amazon.",
       "url": "https://www.primevideo.com",
+      "drm": true,
       "colors": [
         "#1aa3e8",
         "#0b1f33"
@@ -81,6 +86,7 @@
       "eyebrow": "Stream",
       "tagline": "Disney, Pixar, Marvel, Star Wars.",
       "url": "https://www.disneyplus.com",
+      "drm": true,
       "colors": [
         "#2f5bff",
         "#08103a"
@@ -119,11 +125,10 @@
     {
       "id": "settings",
       "name": "Settings",
-      "kind": "uri",
+      "kind": "settings",
       "glyph": "gear",
       "eyebrow": "System",
-      "tagline": "Wi-Fi, display, sound and Bluetooth remotes.",
-      "uri": "ms-settings:",
+      "tagline": "Picture, sound, network, and this TV.",
       "colors": [
         "#8e8e93",
         "#1c1c22"

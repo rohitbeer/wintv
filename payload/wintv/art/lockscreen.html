@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- Source of lockscreen.jpg, the picture behind Windows' sign-in screen.
+     Same colours as the launcher's "Who's watching?" screen; original art,
+     no logos. Rendered at 3840x2160 with a headless browser. -->
+<html><head><meta charset="utf-8"><style>
+  html, body { margin: 0; width: 3840px; height: 2160px; overflow: hidden; background: #050507; }
+  .glow { position: absolute; inset: 0; background:
+    radial-gradient(55% 70% at 24% 22%, rgba(94, 92, 230, .55) 0%, transparent 70%),
+    radial-gradient(45% 60% at 80% 78%, rgba(255, 90, 95, .32) 0%, transparent 70%),
+    radial-gradient(40% 50% at 70% 18%, rgba(10, 132, 255, .22) 0%, transparent 70%),
+    radial-gradient(60% 50% at 30% 100%, rgba(255, 159, 10, .14) 0%, transparent 70%); }
+  .grain { position: absolute; inset: 0; opacity: .05; background-image:
+    repeating-radial-gradient(circle at 17% 32%, #fff 0 1px, transparent 1px 3px); }
+</style></head><body><div class="glow"></div><div class="grain"></div></body></html>

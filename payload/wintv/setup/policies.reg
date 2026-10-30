@@ -40,9 +40,8 @@ Windows Registry Editor Version 5.00
 "EnableActivityFeed"=dword:00000000
 "PublishUserActivities"=dword:00000000
 "UploadUserActivities"=dword:00000000
-; Plain background on the Windows sign-in screen (only the admin sees it)
-"DisableLogonBackgroundImage"=dword:00000001
-"DisableAcrylicBackgroundOnLogon"=dword:00000001
+; Nothing from apps on the lock screen
+"DisableLockScreenAppNotifications"=dword:00000001
 
 ; Teams/Chat auto-install
 [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications]
@@ -64,6 +63,13 @@ Windows Registry Editor Version 5.00
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU]
 "NoAutoRebootWithLoggedOnUsers"=dword:00000001
 
+; No automatic device encryption. With a local account Windows encrypts the
+; disk but leaves the key unprotected on it (no security), while still risking
+; a BitLocker recovery screen after a firmware update. Real BitLocker with a
+; TPM protector and a recovery key the admin keeps is a separate choice (WTV-20).
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\BitLocker]
+"PreventDeviceEncryption"=dword:00000001
+
 ; Privacy questions at setup
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\OOBE]
 "DisablePrivacyExperience"=dword:00000001
@@ -73,8 +79,13 @@ Windows Registry Editor Version 5.00
 "EnableFirstLogonAnimation"=dword:00000000
 "DisableStatusMessages"=dword:00000001
 
+; No Windows lock screen "curtain": locking goes straight to the sign-in
+; screen, which shows the WinTV picture (set per account by firstlogon.ps1).
+; No camera or slideshow on it. The TV's own lock screen is in the launcher.
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Personalization]
 "NoLockScreen"=dword:00000001
+"NoLockScreenCamera"=dword:00000001
+"NoLockScreenSlideshow"=dword:00000001
 
 ; Edge stays gone: Edge Update may not install the browser again.
 ; WebView2 (the shared runtime other apps embed) is still allowed.
