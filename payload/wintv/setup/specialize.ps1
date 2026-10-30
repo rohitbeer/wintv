@@ -74,10 +74,16 @@ Invoke-Step 'default browser for new accounts' {
 }
 
 Invoke-Step 'install the WinTV shell' {
-    $dest = "$env:ProgramFiles\WinTV"
+    # Each version in its own folder; current.json names the one to run, so
+    # an update never overwrites files that are in use (D-28).
+    $version = $Config.shellVersion
+    if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "bad shell version '$version' in build.json" }
+    $dest = "$env:ProgramFiles\WinTV\versions\$version"
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
     Copy-Item -Path (Join-Path $Payload 'shell\*') -Destination $dest -Recurse -Force
     if (-not (Test-Path "$dest\WinTV.exe")) { throw 'WinTV.exe missing after copy' }
+    [IO.File]::WriteAllText("$env:ProgramFiles\WinTV\current.json", (@{ version = $version; bad = @() } | ConvertTo-Json),
+        [Text.UTF8Encoding]::new($false))
     $site = Join-Path $Payload 'config\apps.json'
     if (Test-Path $site) { Copy-Item $site (Join-Path $Root 'apps.json') -Force; Write-Log '  site config installed' }
 }
@@ -111,6 +117,8 @@ Invoke-Step 'power and boot: quiet, straight to the TV' {
         Invoke-Native "$env:SystemRoot\System32\bcdedit.exe" @('/set', '{globalsettings}', $opt, 'true') | Out-Null
     }
 }
+
+Invoke-Step 'update tasks (Windows and WinTV)' { Register-UpdateTasks }
 
 Invoke-Step 'boot task + SetupComplete' {
     Invoke-Native "$env:SystemRoot\System32\schtasks.exe" @('/Create', '/F', '/TN', 'WinTV\Maintain', '/RU', 'SYSTEM',

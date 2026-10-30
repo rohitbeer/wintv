@@ -8,3 +8,9 @@ Invoke-Step 'autologon' { Set-AutoLogon }
 if ((Test-Path $EdgeRemovedMark) -and (Test-Path $EdgeExe)) {
     Invoke-Step 'Edge came back: removing it again' { Remove-Edge }
 }
+# The TV's shell must point at an installed version (D-28).
+Invoke-Step 'TV shell points at the installed version' {
+    $v = (Get-Content "$env:ProgramFiles\WinTV\current.json" -Raw | ConvertFrom-Json).version
+    if (-not (Test-Path "$env:ProgramFiles\WinTV\versions\$v\WinTV.exe")) { throw "version $v from current.json is not installed" }
+    Set-TvShell $v
+}

@@ -86,3 +86,68 @@ function Set-AutoLogon {
     Set-ItemProperty $k -Name DefaultPassword -Value ''
     Remove-ItemProperty $k -Name AutoLogonCount -ErrorAction SilentlyContinue
 }
+
+# A scheduled task that runs a WinTV script as SYSTEM. With -UsersMayStart,
+# local users may *start* it (read + execute in the task's security
+# descriptor) but not change it, and it takes no input from them (D-27).
+function Register-WinTVTask {
+    param([string]$Name, [string]$Script, [string]$Arguments = '', [string[]]$Triggers = @(),
+          [string]$Description, [switch]$UsersMayStart)
+    $svc = New-Object -ComObject Schedule.Service
+    $svc.Connect()
+    try { $folder = $svc.GetFolder('\WinTV') } catch { $folder = $svc.GetFolder('\').CreateFolder('WinTV') }
+    $def = $svc.NewTask(0)
+    $def.RegistrationInfo.Description = $Description
+    $set = $def.Settings
+    $set.MultipleInstances = 2            # a second start while running is ignored
+    $set.DisallowStartIfOnBatteries = $false
+    $set.StopIfGoingOnBatteries = $false
+    $set.StartWhenAvailable = $true
+    $set.ExecutionTimeLimit = 'PT4H'
+    $def.Principal.UserId = 'SYSTEM'
+    $def.Principal.LogonType = 5          # service account
+    $def.Principal.RunLevel = 1           # highest
+    foreach ($t in $Triggers) {
+        if ($t -eq 'boot') { $tr = $def.Triggers.Create(8); $tr.Delay = 'PT5M' }
+        elseif ($t -eq 'daily') {
+            $tr = $def.Triggers.Create(2)
+            $tr.StartBoundary = (Get-Date -Hour 4 -Minute 0 -Second 0).ToString('s')
+            $tr.DaysInterval = 1
+            $tr.RandomDelay = 'PT1H'
+        }
+    }
+    $act = $def.Actions.Create(0)
+    $act.Path = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $act.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Payload\setup\$Script`" $Arguments".Trim()
+    $sddl = 'D:(A;;FA;;;SY)(A;;FA;;;BA)'
+    if ($UsersMayStart) { $sddl += '(A;;GRGX;;;BU)' }
+    [void]$folder.RegisterTaskDefinition($Name, $def, 6, 'SYSTEM', $null, 5, $sddl)
+}
+
+# Every update task, as setup and each release register them.
+function Register-UpdateTasks {
+    Register-WinTVTask -Name 'WindowsUpdateCheck' -Script 'updates.ps1' -Arguments '-Job windows-check' -Triggers boot, daily `
+        -Description 'WinTV: check Windows Update for the TV''s Updates screen.' -UsersMayStart
+    Register-WinTVTask -Name 'WindowsUpdateInstall' -Script 'updates.ps1' -Arguments '-Job windows-install' `
+        -Description 'WinTV: install the updates Windows would install by itself, now (Settings > Updates).' -UsersMayStart
+    Register-WinTVTask -Name 'WinTVUpdate' -Script 'updates.ps1' -Arguments '-Job wintv' -Triggers boot, daily `
+        -Description 'WinTV: install a newer signed WinTV release, or roll back one that does not start.' -UsersMayStart
+}
+
+# The tv account's Shell value names the supervisor of the version in
+# current.json, so the next sign-in starts it. If that file were missing,
+# Windows would quietly start Explorer instead: the Windows desktop on the TV.
+function Set-TvShell([string]$Version) {
+    $sid = (Get-LocalUser -Name tv -ErrorAction SilentlyContinue).SID.Value
+    if (-not $sid) { return }
+    $value = "`"$env:ProgramFiles\WinTV\versions\$Version\WinTV.exe`" --supervise"
+    $loaded = Test-Path "Registry::HKEY_USERS\$sid"
+    if (-not $loaded) { Invoke-Native "$env:SystemRoot\System32\reg.exe" @('load', "HKU\$sid", (Join-Path (Split-Path $env:PUBLIC) 'tv\NTUSER.DAT')) | Out-Null }
+    try {
+        $k = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
+        if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+        Set-ItemProperty $k -Name Shell -Value $value
+    } finally {
+        if (-not $loaded) { [gc]::Collect(); Invoke-Native "$env:SystemRoot\System32\reg.exe" @('unload', "HKU\$sid") | Out-Null }
+    }
+}

@@ -9,6 +9,12 @@
 // only way to start anything.
 
 const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen } = require('electron');
+
+// First thing: an error while starting must end this process (the
+// supervisor then restarts it or rolls back), not leave Electron's
+// "A JavaScript error occurred" dialog on the TV. The full handler, which
+// also logs, replaces this one further down.
+process.on('uncaughtException', (e) => { try { process.stderr.write(String(e && e.stack || e)); } catch { /* nothing to write to */ } app.exit(1); });
 const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,6 +25,11 @@ const IS_WIN = process.platform === 'win32';
 const SYSTEM_DIR = IS_WIN
   ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'WinTV')
   : path.join(os.homedir(), '.wintv');
+// Installed versions (admin-owned): versions\<x.y.z>\ and current.json, which
+// names the one to run. Updates add a folder and rewrite current.json (D-28).
+const INSTALL_DIR = IS_WIN
+  ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'WinTV')
+  : path.join(os.homedir(), '.wintv', 'install');
 
 let win = null;
 let quitting = false;
@@ -674,6 +685,76 @@ function layerIpc() {
   }));
 }
 
+// ---------------------------------------------------------------- updates
+// Windows updates and WinTV's own run as SYSTEM in three scheduled tasks
+// (payload setup/updates.ps1). This account may only start them; they take
+// no input. Their progress is in C:\ProgramData\WinTV\state (D-27, D-28).
+const UPDATE_TASKS = { 'windows-check': 'WindowsUpdateCheck', 'windows-install': 'WindowsUpdateInstall', wintv: 'WinTVUpdate' };
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
+}
+
+function currentVersion() {
+  const v = readJson(path.join(INSTALL_DIR, 'current.json'))?.version;
+  return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v : null;
+}
+
+function updatesState() {
+  const next = currentVersion();
+  const state = (name) => readJson(path.join(SYSTEM_DIR, 'state', `${name}.json`));
+  return {
+    windows: state('windows-update'),
+    wintv: state('wintv-update'),
+    running: app.getVersion(),
+    next,
+    restartPending: !!next && next !== app.getVersion(),
+  };
+}
+
+async function runUpdateTask(job) {
+  const task = UPDATE_TASKS[job];
+  if (!task) return { ok: false, error: 'Unknown update' };
+  if (!IS_WIN) return { ok: false, error: 'Updates need Windows' };
+  log('updates: start', task);
+  const { err } = await quiet('schtasks.exe', ['/Run', '/TN', `\\WinTV\\${task}`]);
+  return err ? { ok: false, error: 'Windows did not start the update' } : { ok: true };
+}
+
+// The new version runs once this process restarts: the supervisor starts
+// whatever current.json names.
+function restartIntoUpdate(reason) {
+  if (!CHILD) return { ok: false, error: 'Restart WinTV to finish' };
+  log('updates: restarting into', currentVersion(), `(${reason})`);
+  stopHelper('update');
+  input?.kill();
+  setTimeout(() => app.exit(0), 300);
+  return { ok: true };
+}
+
+// A downloaded WinTV update switches in when nobody is watching: no app
+// open and no button pressed for 10 minutes.
+function watchForUpdate() {
+  setInterval(() => {
+    if (updatesState().restartPending && running.size === 0 && powerMonitor.getSystemIdleTime() >= 600) restartIntoUpdate('idle');
+  }, 60000);
+}
+
+async function updates(action, arg) {
+  if (action === 'get') return { ok: true, result: updatesState() };
+  if (action === 'run') return runUpdateTask(String(arg));
+  if (action === 'restart') return updatesState().restartPending ? restartIntoUpdate('asked') : { ok: false, error: 'No update waiting' };
+  return { ok: false, error: 'Unknown action' };
+}
+
+// The supervisor's rollback check (updates.ps1) looks for this: the version
+// that is running has drawn its screen.
+function reportHealthy() {
+  try {
+    fs.writeFileSync(path.join(app.getPath('userData'), 'health.json'), JSON.stringify({ version: app.getVersion(), at: new Date().toISOString() }));
+  } catch (e) { log('health:', e.message); }
+}
+
 // ---------------------------------------------------------------- ui files
 // The screens are served from the app's own ui/ folder under wintv://ui/,
 // not file://. The exe's GrantFileProtocolExtraPrivileges fuse is off (a
@@ -752,7 +833,7 @@ function createWindow() {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   // The log is the only window into a TV with no desktop: record whether the
   // page loaded and any error it printed.
-  win.webContents.on('did-finish-load', () => log('ui loaded'));
+  win.webContents.on('did-finish-load', () => { log('ui loaded'); reportHealthy(); });
   win.webContents.on('did-fail-load', (_e, code, desc) => log('ui failed to load:', String(code), desc));
   win.webContents.on('console-message', (e) => {
     if (e.level === 'error' || e.level === 'warning') log('ui', e.level, e.message, `${e.sourceId}:${e.lineNumber}`);
@@ -787,25 +868,67 @@ const SUPERVISE = process.argv.includes('--supervise');
 const CHILD = process.argv.includes('--child');
 const EXIT_ALREADY_RUNNING = 3;
 
+// The shell it starts is the version current.json names, so an update takes
+// effect at the next restart. If that version keeps crashing, the
+// supervisor asks the update task to go back to the previous one.
+function childExe() {
+  const v = currentVersion();
+  const exe = v && path.join(INSTALL_DIR, 'versions', v, 'WinTV.exe');
+  return exe && fs.existsSync(exe) ? exe : process.execPath;
+}
+
+// A start counts as failed if the shell exits with an error within a
+// minute, or hasn't drawn its screen (health.json) after WATCHDOG_MS: a
+// release can crash, or hang. Three failed starts in a row of a version
+// that was just installed ask updates.ps1 to go back to the previous one.
+const WATCHDOG_MS = 90000;
+
+function healthySince(t) {
+  const h = readJson(path.join(app.getPath('userData'), 'health.json'));
+  return !!h && Date.parse(h.at) >= t;
+}
+
 function supervise() {
   app.disableHardwareAcceleration();
-  let recent = [];
+  let failsInARow = 0;
+  let rollbackAsked = null;
   const start = (delay) => setTimeout(() => {
     const passOn = process.argv.slice(1).filter((a) => a !== '--supervise');
-    const child = spawn(process.execPath, [...passOn, '--child'], { stdio: 'ignore' });
-    child.once('error', (e) => { log('supervisor: cannot start the shell:', e.message); start(10000); });
+    const exe = childExe();
+    const started = Date.now();
+    const child = spawn(exe, [...passOn, '--child'], { stdio: 'ignore' });
+    const watchdog = setTimeout(() => {
+      if (child.exitCode === null && !healthySince(started)) {
+        log('supervisor: the shell has not drawn its screen after', String(WATCHDOG_MS / 1000), 's; stopping it');
+        child.kill();
+      }
+    }, WATCHDOG_MS);
+    child.once('error', (e) => { clearTimeout(watchdog); log('supervisor: cannot start the shell:', e.message); start(10000); });
     child.once('exit', (code) => {
-      log('supervisor: shell exited', String(code));
-      const now = Date.now();
-      recent = recent.filter((t) => now - t < 60000).concat(now);
+      clearTimeout(watchdog);
+      log('supervisor: shell exited', String(code), exe);
+      const ranWell = healthySince(started) && Date.now() - started > 60000;
+      if (code === 0 || code === EXIT_ALREADY_RUNNING || ranWell) failsInARow = 0;
+      else failsInARow += 1;
+      const looping = failsInARow >= 3;
+      const version = currentVersion();
+      if (looping && version && rollbackAsked !== version) {
+        rollbackAsked = version;
+        log('supervisor: version', version, 'keeps crashing; asking for the previous one');
+        try {
+          fs.writeFileSync(path.join(app.getPath('userData'), 'crashloop.json'), JSON.stringify({ version, at: new Date().toISOString() }));
+        } catch (e) { log('supervisor:', e.message); }
+        runUpdateTask('wintv');
+      }
       if (code === EXIT_ALREADY_RUNNING) start(30000);
-      else start(recent.length > 5 ? 10000 : 300);
+      else start(looping ? 10000 : 300);
     });
   }, delay);
   app.whenReady().then(() => { log('supervisor: start'); start(0); });
 }
 
 // ---------------------------------------------------------------- startup
+process.removeAllListeners('uncaughtException');
 process.on('uncaughtException', (e) => {
   log('fatal:', e.stack || String(e));
   if (!CHILD) app.relaunch(); // under the supervisor, exiting is enough
@@ -829,6 +952,7 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:power', fromHome((action) => power(String(action))));
     ipcMain.handle('wintv:profile', fromHome((id) => setProfile(String(id))));
     ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
+    ipcMain.handle('wintv:updates', fromHome((action, arg) => updates(String(action), arg)));
     layerIpc();
     if (config.profiles.length === 1) profile = config.profiles[0];
     // Waking the TV shows the lock screen; the next button asks who is watching.
@@ -846,6 +970,7 @@ if (SUPERVISE) {
     createWindow();
     createLayer();
     registerHomeKeys();
+    watchForUpdate();
   });
   app.on('window-all-closed', () => { if (!quitting) createWindow(); });
   app.on('before-quit', () => { quitting = true; });

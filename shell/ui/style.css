@@ -465,6 +465,7 @@ header {
 .set-value { color: var(--dim); font-weight: 500; text-align: right; display: flex; align-items: center; gap: 1.2vw; }
 .set-row.focused .set-value { color: #333; }
 .set-row.choice .set-value::after { content: '›'; font-size: 3.4vh; line-height: 1; }
+.set-row.action .set-value::after { content: '›'; font-size: 3.4vh; line-height: 1; }
 .bar { position: relative; width: 22vw; height: 1vh; border-radius: 1vh; background: rgba(255, 255, 255, .18); overflow: hidden; }
 .set-row.focused .bar { background: rgba(0, 0, 0, .14); }
 .fill { position: absolute; inset: 0 auto 0 0; border-radius: 1vh; background: currentColor; transition: width .15s var(--ease); }

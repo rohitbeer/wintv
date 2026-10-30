@@ -47,15 +47,42 @@ also inside the payload ISO's `autounattend.xml` (the ISO is mode 600).
 Nothing personal belongs in the repo: names, addresses and passwords live in
 `local.env` and your site file, both outside git.
 
-## Real PC (usb variant)
+## Installing on a PC (usb variant)
 
-1. Write the official Windows 11 ISO to a USB stick (Rufus, or `dd` of a
-   hybrid image).
-2. `make-iso.sh usb`, then copy `autounattend.xml` and `wintv/` from that
-   ISO to the root of the stick.
-3. Boot the PC from the stick. Setup asks only which disk to use.
+WinTV is a folder and an answer file that sit next to Microsoft's own,
+unmodified Windows 11 installer (D-2). The disk you pick is erased.
 
-This path is not hardware-tested yet (WTV-15).
+1. Download the Windows 11 ISO from Microsoft and write it to a USB stick
+   (Rufus on Windows: turn off its own "customize Windows" options, WinTV's
+   answer file does that).
+2. Make your site file from `sites/example.json` (names, extra tiles,
+   language, time zone), point `WINTV_SITE` at it, and run
+   `vm/make-iso.sh usb`. Copy `autounattend.xml` and the `wintv` folder
+   from the resulting `wintv-payload-usb.iso` to the root of the stick.
+3. Boot the PC from the stick. Setup asks only which disk to install to,
+   then runs by itself (about 20 to 40 minutes, several restarts) and ends
+   on "Who's watching?". Windows Pro activates itself with the key most
+   PCs carry in their firmware.
+4. Once, remove Edge (see After installing).
+
+The stick holds the admin password in `autounattend.xml`; Windows deletes it
+from the installed system. Wipe the stick or keep it safe. This path is not
+hardware-tested yet (WTV-15).
+
+## Updates
+
+Settings > Updates shows both kinds (D-27, D-28):
+
+- **Windows:** check and "Install now", as a SYSTEM task the TV may only
+  start. Windows installs the same updates by itself anyway.
+- **WinTV:** installed TVs check GitHub Releases of this repo daily for a
+  newer, signed release, install it next to the running version, and switch
+  when no app is open. A release that doesn't start rolls back by itself.
+
+To publish a release, bump `shell/package.json`'s version, commit, and on the
+machine with the release key run `vm/release.sh --publish` (it signs the
+manifest and attaches `manifest.json`, `manifest.sig` and the zip to
+release `vX.Y.Z`).
 
 ## Using it
 

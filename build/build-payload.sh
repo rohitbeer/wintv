@@ -58,6 +58,7 @@ cat > "$OUT/build.json" <<JSON
 {
   "version": "$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo dev)",
   "variant": "$VARIANT",
+  "shellVersion": "$(node -p "require('$ROOT/shell/package.json').version")",
   "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "browser": "brave $tag",
   "browserSigner": "Brave Software"

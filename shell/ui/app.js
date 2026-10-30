@@ -15,6 +15,7 @@ const GLYPHS = {
   power: '<path d="M12 3.6v7.6"/><path d="M7.1 6.3a7.6 7.6 0 1 0 9.8 0"/>',
   sound: '<path d="M4.5 9.5h3l4.5-3.8v12.6l-4.5-3.8h-3z" stroke-linejoin="round"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>',
+  update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
 };
 
 function glyph(name) {
@@ -33,6 +34,7 @@ const api = window.wintv || {
   },
   setProfile: async () => ({ ok: true }),
   system: async (op) => ({ ok: true, result: MOCK_SYSTEM[op] }),
+  updates: async () => ({ ok: true, result: MOCK_UPDATES }),
   launch: async (id) => ({ ok: true, preview: id }),
   quit: async () => ({ ok: true }),
   power: async () => ({ ok: true }),
@@ -52,6 +54,14 @@ const MOCK_SYSTEM = {
   'network.get': { connections: [{ name: 'Ethernet', wifi: false, network: 'Home', internet: true, ipv4: '192.0.2.80', gateway: '192.0.2.1' }] },
   about: { windows: 'Microsoft Windows 11 Pro', version: '25H2 (build 26200.1234)', device: 'WINTV', uptimeMinutes: 1500,
     lastUpdate: new Date(Date.now() - 2 * 86400000).toISOString(), restartNeeded: false },
+};
+
+const MOCK_UPDATES = {
+  running: '0.2.0', next: '0.2.1', restartPending: true,
+  wintv: { state: 'ready', current: '0.2.0', available: '0.2.1', checked: new Date().toISOString() },
+  windows: { state: 'idle', checked: new Date().toISOString(), pending: [{ title: '2026-10 Cumulative Update for Windows 11', sizeMB: 812 },
+    { title: 'Security Intelligence Update for Microsoft Defender Antivirus', sizeMB: 62 }], rebootRequired: false,
+  lastInstall: new Date(Date.now() - 3 * 86400000).toISOString() },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -511,6 +521,7 @@ const SECTIONS = [
   { id: 'display', name: 'Display', glyph: 'tv' },
   { id: 'sound', name: 'Sound', glyph: 'sound' },
   { id: 'network', name: 'Network', glyph: 'globe' },
+  { id: 'updates', name: 'Updates', glyph: 'update' },
   { id: 'about', name: 'About', glyph: 'info' },
 ];
 const KEEP_SECONDS = 15;
@@ -524,6 +535,7 @@ function openSettings() {
 }
 
 function closeSettings() {
+  clearInterval(updatesPoll);
   settings = null;
   repair = { taps: 0, open: false };
   $('settings').classList.add('hidden');
@@ -559,6 +571,8 @@ function pickSection(i) {
 
 async function loadSection() {
   const s = SECTIONS[settings.section];
+  clearInterval(updatesPoll);
+  if (s.id === 'updates') updatesPoll = setInterval(refreshSection, 2000); // progress moves while you look
   const token = ++settings.token;
   $('set-heading').textContent = s.name;
   $('set-note').textContent = '';
@@ -567,6 +581,19 @@ async function loadSection() {
   let rows;
   try { rows = await sectionRows(s.id); } catch (e) { rows = [{ kind: 'info', label: 'Not available', value: e.message }]; }
   if (!settings || token !== settings.token) return; // moved on meanwhile
+  settings.rows = rows;
+  settings.row = Math.min(settings.row, rows.length - 1);
+  paintRows();
+}
+
+// Re-reads the section without the "Loading…" flash and keeps the focus.
+async function refreshSection() {
+  if (!settings) return;
+  const s = SECTIONS[settings.section];
+  const token = settings.token;
+  let rows;
+  try { rows = await sectionRows(s.id); } catch { return; }
+  if (!settings || token !== settings.token || sheet) return;
   settings.rows = rows;
   settings.row = Math.min(settings.row, rows.length - 1);
   paintRows();
@@ -640,6 +667,7 @@ async function sectionRows(id) {
   if (id === 'display') return displayRows(result(await api.system('display.get')));
   if (id === 'sound') return soundRows(result(await api.system('audio.get')));
   if (id === 'network') return networkRows(result(await api.system('network.get')));
+  if (id === 'updates') return updateRows(result(await api.updates('get')));
   return aboutRows(result(await api.system('about')));
 }
 
@@ -754,16 +782,75 @@ function aboutRows(a) {
     { kind: 'info', label: 'Last update', value: a.lastUpdate ? new Date(a.lastUpdate).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' }) : 'Not yet' },
     { kind: 'info', label: 'On for', value: hours >= 24 ? `${Math.floor(hours / 24)} d ${hours % 24} h` : `${hours} h ${a.uptimeMinutes % 60} min` },
   ];
-  if (a.restartNeeded) {
-    rows.push({ kind: 'choice', label: 'Updates', value: 'Restart to finish', options: [
-      { label: 'Restart Now', run: async () => { const r = await api.power('restart'); if (!r.ok) toast(r.error); } }] });
-  }
   if (repair.open) {
     $('set-note').textContent = 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
       + 'and gets the Windows desktop. Signing out there brings the TV back.';
     rows.push({ kind: 'choice', label: 'Repair mode', value: 'Windows desktop', options: [
       { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] });
   }
+  return rows;
+}
+
+// Updates: WinTV's own (signed releases) and Windows', side by side. Both
+// run as SYSTEM tasks this screen may only start (D-27, D-28).
+let updatesPoll = 0;
+const when = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const today = d.toDateString() === new Date().toDateString();
+  return today ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: 'numeric', month: 'long' });
+};
+
+async function startUpdate(job, note) {
+  const r = await api.updates('run', job);
+  toast(r.ok ? note : r.error);
+  setTimeout(refreshSection, 800);
+}
+
+function wintvStatus(u) {
+  const w = u.wintv || {};
+  if (u.restartPending) return `${u.next} is installed and starts when nobody is watching`;
+  if (w.state === 'checking') return 'Checking…';
+  if (w.state === 'downloading') return `Downloading ${w.available}…`;
+  if (w.state === 'installing') return `Installing ${w.available}…`;
+  if (w.state === 'failed') return `Couldn’t update: ${w.error || 'unknown error'}`;
+  if (w.state === 'up-to-date') return `Up to date · checked ${when(w.checked || w.updated)}`;
+  return 'Not checked yet';
+}
+
+function windowsStatus(w) {
+  if (!w) return 'Not checked yet';
+  if (w.state === 'checking') return 'Checking…';
+  if (w.state === 'downloading') return `Downloading ${w.step} of ${w.total}…`;
+  if (w.state === 'installing') return `Installing ${w.step} of ${w.total}…`;
+  if (w.state === 'failed') return w.error ? `Couldn’t update: ${w.error}` : `${w.failedTitles?.length || 1} update(s) failed`;
+  if (w.rebootRequired) return 'Restart to finish';
+  const n = w.pending?.length || 0;
+  return n ? `${n} update${n > 1 ? 's' : ''} ready to install` : `Up to date · checked ${when(w.checked)}`;
+}
+
+function updateRows(u) {
+  const busy = (s) => ['checking', 'downloading', 'installing'].includes(s?.state);
+  const w = u.windows;
+  const rows = [{ kind: 'info', label: `WinTV ${u.running}`, value: wintvStatus(u) }];
+  if (u.restartPending) {
+    rows.push({ kind: 'choice', label: `Start WinTV ${u.next} now`, value: '', options: [
+      { label: 'Restart WinTV', run: async () => { const r = await api.updates('restart'); if (!r.ok) toast(r.error); } }] });
+  } else if (!busy(u.wintv)) {
+    rows.push({ kind: 'action', label: 'Check for WinTV updates', value: '', press: () => startUpdate('wintv', 'Checking for WinTV updates') });
+  }
+  rows.push({ kind: 'info', label: 'Windows', value: windowsStatus(w) });
+  if (w?.rebootRequired && !busy(w)) {
+    rows.push({ kind: 'choice', label: 'Restart to finish', value: '', options: [
+      { label: 'Restart Now', run: async () => { const r = await api.power('restart'); if (!r.ok) toast(r.error); } }] });
+  } else if (w?.pending?.length && !busy(w)) {
+    rows.push({ kind: 'action', label: 'Install Windows updates now', value: `${w.pending.reduce((a, p) => a + (p.sizeMB || 0), 0)} MB`,
+      press: () => startUpdate('windows-install', 'Installing Windows updates. Keep watching, it runs in the background') });
+  }
+  if (!busy(w)) rows.push({ kind: 'action', label: 'Check for Windows updates', value: '', press: () => startUpdate('windows-check', 'Checking for Windows updates') });
+  if (w?.lastInstall) rows.push({ kind: 'info', label: 'Last Windows update', value: when(w.lastInstall) });
+  $('set-note').textContent = 'Windows installs its updates by itself too; “Install now” only does it sooner. '
+    + 'WinTV updates are checked every day, and switch in when no app is open.';
   return rows;
 }
 
