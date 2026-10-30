@@ -1,5 +1,5 @@
 {
-  "_comment": "Example site file for one household. Copy it OUTSIDE the repo (it holds your names and addresses), edit it, and point WINTV_SITE at it in vm/local.env. make-iso.sh installs it as C:\\ProgramData\\WinTV\\apps.json, merged over shell/apps.default.json (see its _comment). \"setup\" is used when building the answer file: Windows display language, regional format, keyboards (input locales), time zone and home location (GeoID). Edge can only be removed when the region is in the EEA (D-5); this example is Ireland.",
+  "_comment": "Example site file for one household. Copy it OUTSIDE the repo (it holds your names and addresses), edit it, and point WINTV_SITE at it in vm/local.env. make-iso.sh installs it as C:\\ProgramData\\WinTV\\apps.json, merged over shell/apps.default.json (see its _comment). \"setup\" is used when building the answer file: Windows display language, regional format, keyboards (input locales), time zone and home location (GeoID). Edge can only be removed when the region is in the EEA (D-5); this example is Ireland. \"weather\" is the town for the weather on the home screen and screen saver (also chosen in Settings > Screen Saver).",
   "setup": {
     "uiLanguage": "en-US",
     "locale": "en-IE",
@@ -12,12 +12,14 @@
     { "id": "sam", "name": "Sam", "colors": ["#30d158", "#0b3d1c"] },
     { "id": "guest", "name": "Guest", "guest": true, "colors": ["#636366", "#1c1c1e"] }
   ],
+  "weather": { "name": "Dublin", "latitude": 53.35, "longitude": -6.26 },
   "addApps": [
     {
       "after": "youtube",
       "id": "jellyfin", "name": "Jellyfin", "kind": "web", "glyph": "film",
       "eyebrow": "Home server", "tagline": "Your own movies, shows and music.",
       "url": "http://jellyfin.local:8096",
+      "logo": "Jellyfin - icon-transparent.svg",
       "colors": ["#a95ce0", "#0b6fb8"]
     }
   ]

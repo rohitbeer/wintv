@@ -1,5 +1,5 @@
 {
-  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz.",
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. logo: a file name on Wikimedia Commons, downloaded by the TV (logoStyle wordmark = the logo replaces the name; logoWhite = drawn white). lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz.",
   "browserCandidates": [
     "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -54,9 +54,11 @@
       "drm": true,
       "userAgent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1",
       "colors": [
-        "#ff3b30",
-        "#5a0a12"
-      ]
+        "#ffffff",
+        "#dcdce2"
+      ],
+      "logo": "YouTube Logo 2017.svg",
+      "logoStyle": "wordmark"
     },
     {
       "id": "netflix",
@@ -68,9 +70,11 @@
       "url": "https://www.netflix.com/browse",
       "drm": true,
       "colors": [
-        "#e50914",
-        "#2b0a0c"
-      ]
+        "#262626",
+        "#000000"
+      ],
+      "logo": "Netflix 2015 logo.svg",
+      "logoStyle": "wordmark"
     },
     {
       "id": "prime",
@@ -82,9 +86,11 @@
       "url": "https://www.primevideo.com",
       "drm": true,
       "colors": [
-        "#1aa3e8",
-        "#0b1f33"
-      ]
+        "#1b2a41",
+        "#00050d"
+      ],
+      "logo": "Prime Video logo (2024).svg",
+      "logoStyle": "wordmark"
     },
     {
       "id": "disney",
@@ -96,9 +102,12 @@
       "url": "https://www.disneyplus.com",
       "drm": true,
       "colors": [
-        "#2f5bff",
-        "#08103a"
-      ]
+        "#1f5fff",
+        "#06144a"
+      ],
+      "logo": "Disney+ logo.svg",
+      "logoStyle": "wordmark",
+      "logoWhite": true
     },
     {
       "id": "browser",
@@ -109,9 +118,11 @@
       "tagline": "A full browser window. Press Home to come back.",
       "url": "https://search.brave.com",
       "colors": [
-        "#ff7a3d",
-        "#3a1450"
-      ]
+        "#34343d",
+        "#121216"
+      ],
+      "logo": "Brave lion icon.svg",
+      "logoStyle": "icon"
     },
     {
       "id": "steam",

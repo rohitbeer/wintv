@@ -19,6 +19,7 @@ const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const art = require('./art');
 
 const IS_WIN = process.platform === 'win32';
 // Admin-owned config (C:\ProgramData\WinTV, read-only for the tv user).
@@ -30,6 +31,11 @@ const SYSTEM_DIR = IS_WIN
 const INSTALL_DIR = IS_WIN
   ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'WinTV')
   : path.join(os.homedir(), '.wintv', 'install');
+
+// Pictures and logos the TV downloaded (art.js), per account.
+const CACHE_DIR = IS_WIN
+  ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'WinTV', 'cache')
+  : path.join(os.homedir(), '.wintv', 'cache');
 
 let win = null;
 let quitting = false;
@@ -86,6 +92,7 @@ function loadConfig() {
     quickKeys: cfg.quickKeys || [],
     lockScreen: { afterMinutes: 5, askWhoAfterMinutes: 30, ...(cfg.lockScreen || {}) },
     keyboard: { autoOpen: true, layout: 'auto', ...(cfg.keyboard || {}) },
+    weather: isPlace(cfg.weather) ? cfg.weather : null,
     apps: items(cfg.apps, 0),
     system: items(cfg.system, 1),
   };
@@ -110,20 +117,57 @@ function findItem(id) {
 }
 
 // ---------------------------------------------------------------- launching
+// A tile's logo, once art.js has it: wintv://ui/cache/logos/<file>.
+function logoUrl(name) {
+  const file = art.logo(name);
+  return file ? `wintv://ui/cache/logos/${file}` : null;
+}
+
+function artState() {
+  return {
+    wallpapers: art.wallpapers().slice(0, 12).map(({ file, title, artist, source, license }) =>
+      ({ url: `wintv://ui/cache/wallpapers/${file}`, title, artist, source, license })),
+  };
+}
+
 function publicState() {
-  const strip = ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row }) =>
-    ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row });
+  const strip = ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row, logo, logoStyle, logoWhite }) =>
+    ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row,
+      logo: logoUrl(logo), logoStyle: logoStyle === 'wordmark' ? 'wordmark' : 'icon', logoWhite: logoWhite === true });
   return {
     apps: visible(config.apps).map(strip),
     system: visible(config.system).map(strip),
     running: [...running.keys()],
-    profiles: config.profiles.map(({ id, name, colors, guest }) => ({ id, name, colors, guest: !!guest })),
+    profiles: profileList(),
+    profileColours: PROFILE_COLOURS,
     profile: profile?.id ?? null,
     browser: config.browser ? path.basename(config.browser, '.exe') : null,
     user: os.userInfo().username,
     version: app.getVersion(),
     prefs,
+    art: artState(),
   };
+}
+
+// Wallpapers and logos: at start, then four times a day. New ones redraw
+// the home screen (its tiles and pictures arrive with the state).
+async function refreshArt() {
+  const redraw = () => { if (win && !win.isDestroyed()) win.webContents.send('state', publicState()); };
+  try { if (await art.refreshLogos([...config.apps, ...config.system].map((a) => a.logo).filter(Boolean))) redraw(); } catch (e) { log('art:', e.message); }
+  try { if (await art.refreshWallpapers(redraw)) redraw(); } catch (e) { log('art:', e.message); }
+}
+
+const fahrenheit = () => ['US', 'LR', 'MM'].includes(app.getLocaleCountryCode?.() || '');
+
+async function weatherNow() {
+  const place = prefs.weatherPlace;
+  if (!place) return { ok: true, result: null };
+  try { return { ok: true, result: { ...(await art.weather(place, fahrenheit())), unit: fahrenheit() ? '°F' : '°C' } }; } catch (e) { return { ok: false, error: e.message }; }
+}
+
+async function findPlaces(name) {
+  if (typeof name !== 'string' || !name.trim() || name.length > 60) return { ok: false, error: 'bad argument' };
+  try { return { ok: true, result: await art.findPlaces(name.trim()) }; } catch (e) { return { ok: false, error: e.message }; }
 }
 
 function pushState() {
@@ -302,14 +346,46 @@ async function system(op, args) {
 // are accepted; the site file's lockScreen gives the screen saver defaults.
 const PREFS = {
   screenSaverMinutes: [2, 5, 10, 15, 30, 0], // idle minutes on the home screen; 0 = never
-  screenSaverStyle: ['colour', 'dark'],
+  screenSaverStyle: ['photo', 'colour', 'dark'],
   askWhoMinutes: [15, 30, 60, 120, 0],       // waking after this long away asks who is watching; 0 = never
   navSounds: ['off', 'soft', 'normal', 'loud'],
   textSize: ['default', 'large', 'larger'],
   reduceMotion: [false, true],
   highContrast: [false, true],
+  weatherPlace: (v) => v === null || isPlace(v),
+  profileLooks: (v) => isProfileLooks(v),
 };
 let prefs = null;
+
+// A profile's name and colour, changed from the TV (the profile menu). The
+// profiles themselves come from the site file; this only renames and
+// recolours them, on this TV.
+const PROFILE_COLOURS = {
+  orange: ['#ff9f0a', '#5a2a00'], green: ['#30d158', '#0b3d1c'], blue: ['#0a84ff', '#06224a'], purple: ['#bf5af2', '#3a1450'],
+  pink: ['#ff375f', '#4a0a1c'], teal: ['#64d2ff', '#0b3344'], yellow: ['#ffd60a', '#4a3a00'], grey: ['#8e8e93', '#1c1c1e'],
+};
+
+function isProfileLooks(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  return Object.entries(v).every(([id, look]) => config.profiles.some((p) => p.id === id && !p.guest)
+    && look && typeof look === 'object'
+    && (look.name === undefined || (typeof look.name === 'string' && /^[^\u0000-\u001f\u007f<>]{1,24}$/.test(look.name.trim())))
+    && (look.colour === undefined || look.colour in PROFILE_COLOURS));
+}
+
+function profileList() {
+  return config.profiles.map(({ id, name, colors, guest }) => {
+    const look = prefs.profileLooks?.[id] || {};
+    return { id, name: look.name?.trim() || name, colors: PROFILE_COLOURS[look.colour] || colors, guest: !!guest };
+  });
+}
+
+function isPlace(p) {
+  return !!p && typeof p === 'object' && typeof p.name === 'string' && p.name.length > 0 && p.name.length <= 60
+    && Number.isFinite(p.latitude) && Math.abs(p.latitude) <= 90 && Number.isFinite(p.longitude) && Math.abs(p.longitude) <= 180;
+}
+
+const prefOk = (key, value) => (Array.isArray(PREFS[key]) ? PREFS[key].includes(value) : !!PREFS[key]?.(value));
 
 function prefsFile() {
   return path.join(app.getPath('userData'), 'settings.json');
@@ -319,18 +395,21 @@ function loadPrefs() {
   const saved = readJson(prefsFile()) || {};
   prefs = {
     screenSaverMinutes: config.lockScreen.afterMinutes,
-    screenSaverStyle: 'colour',
+    screenSaverStyle: 'photo',
     askWhoMinutes: config.lockScreen.askWhoAfterMinutes,
     navSounds: 'normal',
     textSize: 'default',
     reduceMotion: false,
     highContrast: false,
+    weatherPlace: config.weather,
+    profileLooks: {},
   };
-  for (const [key, allowed] of Object.entries(PREFS)) if (allowed.includes(saved[key])) prefs[key] = saved[key];
+  for (const key of Object.keys(PREFS)) if (key in saved && prefOk(key, saved[key])) prefs[key] = saved[key];
 }
 
 async function setPref(key, value) {
-  if (!PREFS[key]?.includes(value)) return { ok: false, error: 'bad argument' };
+  if (!prefOk(key, value)) return { ok: false, error: 'bad argument' };
+  if (key === 'weatherPlace' && value) value = { name: value.name, latitude: value.latitude, longitude: value.longitude };
   if (key === 'reduceMotion' && IS_WIN) {
     // Windows' "Animation effects" too: Brave and other apps read it as
     // prefers-reduced-motion, so websites keep still as well.
@@ -347,8 +426,8 @@ async function setPref(key, value) {
     log('prefs: cannot save:', e.message);
     return { ok: false, error: 'Could not save the setting' };
   }
-  log('prefs:', key, String(value));
-  if (win && !win.isDestroyed()) win.webContents.send('prefs', prefs);
+  log('prefs:', key, value && typeof value === 'object' ? 'changed' : String(value));
+  if (win && !win.isDestroyed()) win.webContents.send(key === 'profileLooks' ? 'state' : 'prefs', key === 'profileLooks' ? publicState() : prefs);
   layerSend('prefs', prefs);
   return { ok: true, result: prefs };
 }
@@ -849,8 +928,11 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'wintv', privileges: { standard:
 function serveUi() {
   protocol.handle('wintv', (req) => {
     const url = new URL(req.url);
-    const file = path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
-    if (url.host !== 'ui' || !file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
+    if (url.host !== 'ui') return new Response('', { status: 404 });
+    // Pictures art.js downloaded: only names it writes itself.
+    const cached = /^\/cache\/(wallpapers|logos)\/([0-9a-f-]{1,40}\.(?:jpg|png))$/.exec(url.pathname);
+    const file = cached ? path.join(CACHE_DIR, cached[1], cached[2]) : path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
+    if (!cached && !file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
     try {
       return new Response(fs.readFileSync(file), { headers: { 'content-type': UI_TYPES[path.extname(file)] || 'application/octet-stream' } });
     } catch {
@@ -1017,6 +1099,7 @@ if (SUPERVISE) {
   app.whenReady().then(() => {
     config = loadConfig();
     loadPrefs();
+    art.init(CACHE_DIR, log);
     log(`start v${app.getVersion()} user=${os.userInfo().username} browser=${config.browser || 'none'}`);
     session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     serveUi();
@@ -1028,6 +1111,10 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
     ipcMain.handle('wintv:updates', fromHome((action, arg) => updates(String(action), arg)));
     ipcMain.handle('wintv:pref', fromHome((key, value) => setPref(String(key), value)));
+    ipcMain.handle('wintv:weather', fromHome(() => weatherNow()));
+    ipcMain.handle('wintv:places', fromHome((name) => findPlaces(name)));
+    // The home screen's own text fields (the weather town) call up the keyboard.
+    ipcMain.handle('wintv:keyboard', fromHome((on) => { if (on === true) openKeyboard(false, true); else closeSurface('keyboard'); return { ok: true }; }));
     layerIpc();
     if (config.profiles.length === 1) profile = config.profiles[0];
     // Waking the TV shows the lock screen; the next button asks who is watching.
@@ -1046,6 +1133,8 @@ if (SUPERVISE) {
     createLayer();
     registerHomeKeys();
     watchForUpdate();
+    setTimeout(refreshArt, 15000);
+    setInterval(refreshArt, 6 * 3600000);
   });
   app.on('window-all-closed', () => { if (!quitting) createWindow(); });
   app.on('before-quit', () => { quitting = true; });

@@ -68,6 +68,42 @@ body.pointer { cursor: default; }
     radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0,0,0,.55) 100%);
 }
 
+/* ------------------------------------------------------------ wallpaper (D-32)
+   The picture of the day stands still behind the home screen, blurred and
+   darkened more towards the tiles. As the screen saver (body.saver) it
+   sharpens and drifts; app.js moves #wall-move. Without pictures (offline,
+   first start) the colour shelf above stays. */
+#wall { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: #000; display: none; }
+body.has-wall #wall { display: block; }
+body.has-wall #shelf { display: none; }
+#wall-move { position: absolute; inset: 0; transform: scale(1.06); will-change: transform; }
+.wall-img, #wall-blur { position: absolute; inset: 0; background: center / cover no-repeat; }
+.wall-img { opacity: 0; transition: opacity 2.4s var(--ease); }
+.wall-img.on { opacity: 1; }
+#wall-blur {
+  inset: -3%;
+  transition: opacity 1.6s var(--ease);
+  -webkit-mask-image: linear-gradient(180deg, transparent 22%, rgba(0, 0, 0, .7) 48%, #000 70%);
+  mask-image: linear-gradient(180deg, transparent 22%, rgba(0, 0, 0, .7) 48%, #000 70%);
+}
+#wall-shade {
+  position: absolute;
+  inset: 0;
+  transition: opacity 1.6s var(--ease);
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .62) 0%, rgba(0, 0, 0, .25) 42%, transparent 68%),
+    linear-gradient(0deg, rgba(0, 0, 0, .72) 0%, rgba(0, 0, 0, .3) 40%, transparent 62%),
+    linear-gradient(180deg, rgba(0, 0, 0, .35) 0%, transparent 18%);
+}
+header, #info, #rows { transition: opacity .9s var(--ease); }
+body.saver header, body.saver #info, body.saver #rows { opacity: 0; }
+body.saver #wall-blur { opacity: 0; }
+body.saver #wall-shade { opacity: .35; }
+
+#weather { display: flex; align-items: center; gap: .5vw; color: var(--text); }
+#weather:empty { display: none; }
+#weather svg { width: calc(3.4vh * var(--ts, 1)); height: calc(3.4vh * var(--ts, 1)); }
+
 header {
   position: fixed;
   top: 4.5vh;
@@ -187,6 +223,11 @@ header {
 .face svg { width: 32%; height: 40%; color: #fff; filter: drop-shadow(0 .5vh 1vh rgba(0,0,0,.3)); }
 .row.system .face svg { width: 30%; height: 42%; }
 .face .name { font-size: calc(var(--tile-h) * .13); font-weight: 650; letter-spacing: .01em; }
+/* The service's own logo (art.js): a wordmark replaces the name. */
+.face .logo { max-width: 34%; max-height: 40%; object-fit: contain; filter: drop-shadow(0 .4vh .8vh rgba(0,0,0,.25)); }
+.face .logo.wordmark { max-width: 64%; max-height: 38%; }
+.face .logo.white { filter: brightness(0) invert(1) drop-shadow(0 .4vh .8vh rgba(0,0,0,.25)); }
+.face .logo.wordmark + .name { display: none; }
 .row.system .face .name { display: none; }
 
 .card .sheen {
@@ -257,6 +298,7 @@ header {
   transition: opacity .3s var(--ease);
 }
 #sheet.hidden { opacity: 0; pointer-events: none; }
+#sheet.typing { place-items: start center; padding-top: 9vh; } /* above the TV's keyboard */
 #sheet .panel {
   min-width: 34vw;
   padding: 4vh 3vw 3vh;
@@ -292,6 +334,9 @@ header {
   outline: none;
 }
 .choice.focused { background: #f5f5f7; color: #111; transform: scale(1.04); }
+.choice.search { width: 100%; min-width: 30vw; border: 0; font: inherit; font-size: calc(2.6vh * var(--ts, 1)); }
+.choice.search::placeholder { color: var(--dim); }
+.choice.search.focused::placeholder { color: #666; }
 
 /* ------------------------------------------------------------ who's watching */
 #picker {
@@ -344,7 +389,9 @@ header {
 }
 .who-name { font-size: calc(2.6vh * var(--ts, 1)); font-weight: 600; color: var(--dim); transition: color .3s; }
 .face-btn.focused .who-name { color: var(--text); }
-.avatar.mini { width: 4.6vh; height: 4.6vh; font-size: calc(2.2vh * var(--ts, 1)); box-shadow: 0 .5vh 1.5vh rgba(0,0,0,.35); }
+.avatar.mini { width: 4.6vh; height: 4.6vh; font-size: calc(2.2vh * var(--ts, 1)); box-shadow: 0 .5vh 1.5vh rgba(0,0,0,.35); transition: transform .35s var(--spring), box-shadow .35s var(--ease); }
+#me.focused .avatar.mini { transform: scale(1.3); box-shadow: 0 1vh 2.4vh rgba(0,0,0,.5), 0 0 0 .35vh #f5f5f7; }
+body.high-contrast #me.focused .avatar.mini { box-shadow: 0 0 0 .5vh #ffd60a; }
 
 /* ------------------------------------------------------------ toast */
 #toast {
@@ -403,6 +450,29 @@ header {
   font-variant-numeric: tabular-nums;
 }
 #lock-date { margin-top: 1.6vh; font-size: calc(3.2vh * var(--ts, 1)); font-weight: 500; color: var(--dim); }
+#lock-weather { display: flex; align-items: center; gap: .8vw; margin-top: 1.2vh; font-size: calc(2.6vh * var(--ts, 1)); font-weight: 500; color: var(--dim); }
+#lock[data-spot="1"] #lock-weather, #lock[data-spot="2"] #lock-weather { justify-content: flex-end; }
+#lock-weather svg { width: calc(3.2vh * var(--ts, 1)); height: calc(3.2vh * var(--ts, 1)); }
+/* "Photos": the wallpaper itself is the screen saver; this layer only
+   carries the clock and the picture's credit. */
+#lock.photo { background: transparent; }
+#lock.photo .art { display: none; }
+#lock.photo .lock-shade { background: radial-gradient(70% 60% at 15% 100%, rgba(0, 0, 0, .45) 0%, transparent 70%), radial-gradient(70% 60% at 85% 0%, rgba(0, 0, 0, .35) 0%, transparent 70%); }
+#lock-credit {
+  position: absolute;
+  right: 3vw;
+  bottom: 3vh;
+  max-width: 36vw;
+  font-size: calc(1.5vh * var(--ts, 1));
+  color: rgba(245, 245, 247, .55);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 .2vh .8vh rgba(0, 0, 0, .6);
+  display: none;
+}
+#lock.photo #lock-credit { display: block; }
 #lock-hint {
   position: absolute;
   left: 50%;

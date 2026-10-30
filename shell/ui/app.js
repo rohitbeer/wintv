@@ -18,6 +18,14 @@ const GLYPHS = {
   update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
   moon: '<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" stroke-linejoin="round"/>',
   access: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="7.4" r=".9" fill="currentColor"/><path d="M7.6 9.8l4.4.9 4.4-.9M12 10.7v3.4M12 14.1l-2.2 3.6M12 14.1l2.2 3.6"/>',
+  // weather
+  sun: '<circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"/>',
+  cloud: '<path d="M7.2 18.5h10.3a3.9 3.9 0 0 0 .4-7.8 5.4 5.4 0 0 0-10.4-1.2 4.5 4.5 0 0 0-.3 9z" stroke-linejoin="round"/>',
+  partly: '<circle cx="8.4" cy="8.4" r="2.8"/><path d="M8.4 3.2v1.1M3.2 8.4h1.1M4.7 4.7l.8.8M12.1 4.7l-.8.8"/><path d="M9.5 19.5h8.4a3.3 3.3 0 0 0 .3-6.6 4.6 4.6 0 0 0-8.8-.9 3.8 3.8 0 0 0 .1 7.5z" stroke-linejoin="round"/>',
+  rain: '<path d="M7.2 15h10.3a3.6 3.6 0 0 0 .4-7.2 5.2 5.2 0 0 0-10.2-1.1 4.2 4.2 0 0 0-.5 8.3z" stroke-linejoin="round"/><path d="M8.8 18l-.9 2.4M12.8 18l-.9 2.4M16.8 18l-.9 2.4"/>',
+  snow: '<path d="M7.2 15h10.3a3.6 3.6 0 0 0 .4-7.2 5.2 5.2 0 0 0-10.2-1.1 4.2 4.2 0 0 0-.5 8.3z" stroke-linejoin="round"/><circle cx="8.6" cy="18.6" r=".7" fill="currentColor"/><circle cx="12.2" cy="20.2" r=".7" fill="currentColor"/><circle cx="15.8" cy="18.6" r=".7" fill="currentColor"/>',
+  storm: '<path d="M7.2 15h10.3a3.6 3.6 0 0 0 .4-7.2 5.2 5.2 0 0 0-10.2-1.1 4.2 4.2 0 0 0-.5 8.3z" stroke-linejoin="round"/><path d="M12.8 15.6l-2 3h3l-2 3" stroke-linejoin="round"/>',
+  fog: '<path d="M4 9h16M6 12.5h12M4 16h16"/>',
 };
 
 function glyph(name) {
@@ -34,9 +42,16 @@ const api = window.wintv || {
     const prefs = { screenSaverMinutes: Number(q.get('lock') || cfg.lockScreen.afterMinutes), screenSaverStyle: q.get('saver') || 'colour',
       askWhoMinutes: cfg.lockScreen.askWhoAfterMinutes, navSounds: 'normal', textSize: q.get('text') || 'default',
       reduceMotion: q.has('still'), highContrast: q.has('contrast') };
-    return { apps: tag(cfg.apps, 0), system: tag(cfg.system, 1), running: ['youtube'], browser: 'brave', user: 'preview',
-      profiles: cfg.profiles || [], profile: null, prefs };
+    // ?wall=<picture url> and ?logos (served at ../logos/<id>.png) try the downloaded art.
+    const logo = (list) => list.map((a) => ({ ...a, logo: q.has('logos') && a.logo ? `../logos/${a.id}.png` : null, logoStyle: a.logoStyle || 'icon' }));
+    const art = { wallpapers: q.has('wall') ? [{ url: q.get('wall'), title: 'Sunrays through fog near Walchwil, Switzerland', artist: 'A photographer', license: 'CC BY-SA 4.0' }] : [] };
+    return { apps: logo(tag(cfg.apps, 0)), system: tag(cfg.system, 1), running: ['youtube'], browser: 'brave', user: 'preview',
+      profiles: cfg.profiles || [], profile: null, prefs: { ...prefs, weatherPlace: q.has('weather') ? { name: 'Dublin' } : null }, art,
+      profileColours: { orange: ['#ff9f0a', '#5a2a00'], green: ['#30d158', '#0b3d1c'], blue: ['#0a84ff', '#06224a'] } };
   },
+  weather: async () => ({ ok: true, result: { place: 'Dublin', temp: 9, code: 2, day: true, high: 12, low: 6, unit: '°C' } }),
+  places: async (name) => ({ ok: true, result: [{ name, region: 'Leinster, Ireland', latitude: 53.35, longitude: -6.26 }] }),
+  keyboard: async () => ({ ok: true }),
   setProfile: async () => ({ ok: true }),
   setPref: async (key, value) => ({ ok: true, result: { ...prefs, [key]: value } }),
   system: async (op) => ({ ok: true, result: MOCK_SYSTEM[op] }),
@@ -110,6 +125,14 @@ function tileFor(item) {
     </div>
     <div class="label"></div>
     <div class="dot"></div>`;
+  // The service's own logo, once the TV has downloaded it (art.js).
+  if (item.logo) {
+    const img = document.createElement('img');
+    img.className = `logo ${item.logoStyle}${item.logoWhite ? ' white' : ''}`;
+    img.alt = '';
+    img.src = item.logo;
+    b.querySelector('.face svg').replaceWith(img);
+  }
   b.querySelector('.name').textContent = item.name;
   b.querySelector('.label').textContent = item.name;
   return b;
@@ -198,8 +221,10 @@ function move(dx, dy) {
   if (picker) { if (dx) movePicker(dx); return; }
   if (sheet) { if (dy) moveSheet(dy); return; }
   if (settings) { moveSettings(dx, dy); return; }
+  if (meFocused) { if (dy > 0) focusMe(false); return; }
   if (dy) {
     const r = pos.row + dy;
+    if (r < 0 && focusMe(true)) return;
     if (r < 0 || r >= rows.length) return bump(dy < 0 ? 'up' : 'down');
     // Land on the tile whose centre is closest to where the eye already is.
     const from = currentTile().getBoundingClientRect();
@@ -233,6 +258,7 @@ async function activate() {
   if (picker) return choosePicker();
   if (sheet) return sheet.items[sheet.index].run();
   if (settings) return activateSetting();
+  if (meFocused) { select(); return openProfileMenu(); }
   const item = current();
   const el = currentTile();
   el.classList.add('pressed');
@@ -251,10 +277,11 @@ function openSheet(title, items, start = 0) {
   const box = $('sheet-items');
   box.innerHTML = '';
   sheet.buttons = items.map((it, i) => {
-    const b = document.createElement('button');
-    b.className = 'choice';
+    const b = document.createElement(it.input ? 'input' : 'button');
+    b.className = it.input ? 'choice search' : 'choice';
     b.tabIndex = -1;
-    b.textContent = it.label;
+    if (it.input) Object.assign(b, { type: 'text', placeholder: it.label, value: it.value || '', spellcheck: false, autocomplete: 'off' });
+    else b.textContent = it.label;
     b.addEventListener('mousemove', () => focusSheet(i));
     b.addEventListener('click', () => { focusSheet(i); it.run(); });
     box.append(b);
@@ -268,6 +295,9 @@ function focusSheet(i) {
   sheet.buttons[sheet.index]?.classList.remove('focused');
   sheet.index = i;
   sheet.buttons[i].classList.add('focused');
+  // A text field takes the focus and calls up the TV's keyboard (it types
+  // into whatever has the focus, this window included).
+  if (sheet.buttons[i].tagName === 'INPUT') { sheet.buttons[i].focus(); $('sheet').classList.add('typing'); api.keyboard(true); } else leaveField();
   sheet.buttons[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); // long lists scroll
 }
 
@@ -278,8 +308,16 @@ function moveSheet(dy) {
   tick();
 }
 
+function leaveField() {
+  $('sheet').classList.remove('typing');
+  if (document.activeElement?.tagName !== 'INPUT') return;
+  document.activeElement.blur();
+  api.keyboard(false);
+}
+
 function closeSheet() {
   if (!sheet) return false;
+  leaveField();
   sheet = null;
   $('sheet').classList.add('hidden');
   return true;
@@ -311,6 +349,7 @@ function openContext() {
 function back() {
   if (picker) { if (active) closePicker(); return; }
   if (closeSheet()) return;
+  if (meFocused) { focusMe(false); return; }
   if (settings) { settingsBack(); return; }
   if (pos.row !== 0 || pos.col !== 0) setFocus(0, 0);
 }
@@ -380,9 +419,71 @@ function closePicker() {
 function paintMe() {
   const me = $('me');
   me.innerHTML = '';
-  const p = profiles.find((x) => x.id === active);
-  if (!p || profiles.length < 2) return;
+  const p = profiles.find((x) => x.id === active) || (profiles.length === 1 ? profiles[0] : null);
+  if (!p) return;
   me.append(avatar(p, 'avatar mini'));
+}
+
+// ------------------------------------------------------------------ profile menu
+// The avatar at the top is the second way into Settings (WTV-58): Up from
+// the apps reaches it, OK opens this profile's menu.
+let meFocused = false;
+let profileColours = {};
+
+function focusMe(on) {
+  if (on && !$('me').childElementCount) return false;
+  meFocused = on;
+  $('me').classList.toggle('focused', on);
+  currentTile()?.classList.toggle('focused', !on);
+  tick();
+  if (on) {
+    const p = me();
+    $('eyebrow').textContent = 'Profile';
+    $('title').textContent = p?.name || '';
+    $('tagline').textContent = 'Switch profile, your name and colour, and all Settings.';
+  } else showShelf(current());
+  return true;
+}
+
+const me = () => profiles.find((x) => x.id === active) || (profiles.length === 1 ? profiles[0] : null);
+
+function openProfileMenu() {
+  const p = me();
+  if (!p) return;
+  const done = (fn) => () => { closeSheet(); focusMe(false); fn(); };
+  openSheet(p.name, [
+    ...(profiles.length > 1 ? [{ label: 'Switch Profile', run: done(openPicker) }] : []),
+    ...(p.guest ? [] : [{ label: 'Rename', run: () => renameProfile(p) }, { label: 'Colour', run: () => recolourProfile(p) }]),
+    { label: 'Settings', run: done(openSettings) },
+    { label: 'Screen Saver Now', run: done(() => showLock(false)) },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+function saveLook(id, change) {
+  focusMe(false); // back on the tiles, as after any menu choice
+  const looks = { ...(prefs.profileLooks || {}) };
+  looks[id] = { ...(looks[id] || {}), ...change };
+  return savePref('profileLooks', looks);
+}
+
+function renameProfile(p) {
+  openSheet('Rename', [
+    { input: true, label: 'Name', value: p.name, run: () => {
+      const name = sheet.buttons[0].value.trim();
+      closeSheet();
+      if (name && name !== p.name) saveLook(p.id, { name: name.slice(0, 24) });
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+function recolourProfile(p) {
+  const names = Object.keys(profileColours);
+  openSheet('Colour', [
+    ...names.map((c) => ({ label: c.charAt(0).toUpperCase() + c.slice(1), run: () => { closeSheet(); saveLook(p.id, { colour: c }); } })),
+    { label: 'Cancel', run: closeSheet },
+  ], Math.max(0, names.findIndex((c) => profileColours[c][0] === p.colors?.[0])));
 }
 
 // ------------------------------------------------------------------ keys
@@ -396,6 +497,13 @@ window.addEventListener('keydown', (e) => {
   if (wake()) { e.preventDefault(); return; } // the press that wakes the TV does nothing else
   document.body.classList.remove('pointer');
   const k = e.key;
+  // In a text field, letters, Backspace and left/right edit it; OK submits.
+  if (e.target instanceof HTMLInputElement) {
+    if (k === 'Enter') { e.preventDefault(); sheet?.items[sheet.index]?.run(); }
+    else if (k === 'Escape') { e.preventDefault(); back(); }
+    else if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); move(0, k === 'ArrowDown' ? 1 : -1); }
+    return;
+  }
   const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   if (dirs[k]) { e.preventDefault(); move(...dirs[k]); return; }
   if (k === 'Enter' || k === ' ') {
@@ -509,6 +617,127 @@ function clock() {
   setTimeout(clock, 1000 * (60 - new Date().getSeconds()));
 }
 
+// ------------------------------------------------------------------ wallpaper
+// The picture of the day from Wikimedia Commons (art.js downloads them). On
+// the home screen it stands still, blurred towards the tiles; as the screen
+// saver it sharpens and drifts, and waking slows it to a stop where it is,
+// the way a Mac's lock screen does (D-32).
+let walls = [];        // [{ url, title, artist, license }], newest first
+let wallAt = -1;       // the one on screen
+let wallFlip = false;
+let drift = null;      // the screen saver's slow pan and zoom
+
+function useArt(a) {
+  const before = walls[wallAt]?.url;
+  walls = a?.wallpapers || [];
+  document.body.classList.toggle('has-wall', walls.length > 0);
+  const keep = walls.findIndex((w) => w.url === before);
+  if (keep >= 0) wallAt = keep;
+  else if (walls.length) showWall(0);
+}
+
+function loadImage(url) {
+  const img = new Image();
+  img.src = url;
+  return img.decode().then(() => img);
+}
+
+// The blur behind the tiles is drawn once, small, instead of a live blur
+// filter over a 4K picture on every frame.
+function blurred(img) {
+  const c = document.createElement('canvas');
+  c.width = 640;
+  c.height = 360;
+  const g = c.getContext('2d');
+  g.filter = 'blur(9px) saturate(1.25) brightness(.78)';
+  const s = Math.max(c.width / img.naturalWidth, c.height / img.naturalHeight) * 1.08;
+  const w = img.naturalWidth * s;
+  const h = img.naturalHeight * s;
+  g.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+async function showWall(i) {
+  if (!walls.length) return;
+  const at = (i + walls.length) % walls.length;
+  const w = walls[at];
+  let img;
+  try { img = await loadImage(w.url); } catch { return; } // decoded first, so the fade never shows a blank
+  wallAt = at;
+  const next = $(wallFlip ? 'wall-a' : 'wall-b');
+  const prev = $(wallFlip ? 'wall-b' : 'wall-a');
+  wallFlip = !wallFlip;
+  next.style.backgroundImage = `url("${w.url}")`;
+  next.classList.add('on');
+  prev.classList.remove('on');
+  $('wall-blur').style.backgroundImage = `url("${blurred(img)}")`;
+  const author = w.artist ? `Photo: ${w.artist}` : `Photo: author named on Commons, “${w.source}”`;
+  $('lock-credit').textContent = [w.title, author, w.license, 'Wikimedia Commons'].filter(Boolean).join(' · ');
+}
+
+function startDrift() {
+  if (look.still) return;
+  drift ||= $('wall-move').animate([
+    { transform: 'scale(1.06) translate3d(-1.8%, -1.2%, 0)' },
+    { transform: 'scale(1.2) translate3d(1.8%, 1.4%, 0)' },
+  ], { duration: 50000, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' });
+  drift.updatePlaybackRate(1);
+  drift.play();
+}
+
+// Waking: the drift slows to a stop over about a second, and stays there.
+function stopDrift() {
+  if (!drift || drift.playState !== 'running') return;
+  let rate = 1;
+  const slow = () => {
+    if (lock) return; // the screen saver came back meanwhile
+    rate *= 0.94;
+    if (rate < 0.03) { drift.pause(); return; }
+    drift.updatePlaybackRate(rate);
+    requestAnimationFrame(slow);
+  };
+  requestAnimationFrame(slow);
+}
+
+// ------------------------------------------------------------------ weather
+// From Open-Meteo for the town chosen in Settings > Screen Saver (main.js
+// asks, at most every 15 minutes). WMO weather codes to a picture and a word.
+let weather = null;
+
+function sky(code, day) {
+  if (code <= 1) return [day ? 'sun' : 'moon', code ? 'Mostly clear' : 'Clear'];
+  if (code === 2) return [day ? 'partly' : 'cloud', 'Partly cloudy'];
+  if (code === 3) return ['cloud', 'Cloudy'];
+  if (code === 45 || code === 48) return ['fog', 'Fog'];
+  if (code >= 51 && code <= 57) return ['rain', 'Drizzle'];
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return ['rain', 'Rain'];
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return ['snow', 'Snow'];
+  if (code >= 95) return ['storm', 'Thunderstorm'];
+  return ['cloud', ''];
+}
+
+async function refreshWeather() {
+  if (!prefs.weatherPlace) weather = null;
+  else {
+    const r = await api.weather().catch(() => null);
+    if (r?.ok) weather = r.result; // a failed fetch keeps the last reading
+  }
+  paintWeather();
+}
+
+function paintWeather() {
+  const top = $('weather');
+  const low = $('lock-weather');
+  top.innerHTML = '';
+  low.innerHTML = '';
+  if (!weather) return;
+  const [pic, word] = sky(weather.code, weather.day);
+  top.innerHTML = glyph(pic);
+  top.append(`${weather.temp}°`);
+  low.innerHTML = glyph(pic);
+  low.append([`${weather.temp}°`, word, `H ${weather.high}° L ${weather.low}°`, weather.place].filter(Boolean).join(' · '));
+}
+
 // ------------------------------------------------------------------ settings
 // WinTV's own Settings, in place of Windows' Settings app (which needs
 // Explorer, and the TV account has none). Big rows a remote can drive.
@@ -529,6 +758,7 @@ const KEEP_SECONDS = 15;
 const NOTES = {
   display: () => 'If the edges of the picture are cut off, turn on your TV’s “Just Scan”, “Screen Fit” or “Full Pixel” picture size.',
   saver: () => 'The screen saver comes on over the home screen only: a film keeps the TV awake. '
+    + 'Photos are Wikimedia Commons’ pictures of the day; the weather comes from Open-Meteo. '
     + 'Turning off the screen and sleep apply while the PC is plugged in.',
   access: () => 'Text size and high contrast change WinTV’s own screens, over every app too. '
     + 'Reduce motion also asks apps and websites to keep still.',
@@ -761,9 +991,11 @@ async function savePref(key, value) {
 
 function usePrefs(p) {
   if (!p) return;
+  const moved = JSON.stringify(p.weatherPlace ?? null) !== JSON.stringify(prefs.weatherPlace ?? null);
   prefs = p;
   applyLook(p);
   $('lock').classList.toggle('dark', p.screenSaverStyle === 'dark');
+  if (moved) refreshWeather();
 }
 
 let volTimer = 0;
@@ -792,8 +1024,8 @@ function soundRows(a) {
 function saverRows(power) {
   const rows = [
     pick('Screen saver', prefs.screenSaverMinutes, [2, 5, 10, 15, 30, 0], minutes, (v) => savePref('screenSaverMinutes', v)),
-    pick('Style', prefs.screenSaverStyle, ['colour', 'dark'], (v) => (v === 'dark' ? 'Clock on black' : 'Clock on colour'),
-      (v) => savePref('screenSaverStyle', v)),
+    pick('Style', prefs.screenSaverStyle, Object.keys(SAVER_STYLES), (v) => SAVER_STYLES[v], (v) => savePref('screenSaverStyle', v)),
+    { kind: 'action', label: 'Weather', value: prefs.weatherPlace?.name || 'Off', press: chooseWeather },
   ];
   if (profiles.length > 1) {
     rows.push(pick('Ask who’s watching', prefs.askWhoMinutes, [15, 30, 60, 120, 0], (m) => (m ? `${minutes(m)} away` : 'Never'),
@@ -804,6 +1036,32 @@ function saverRows(power) {
     pick('Sleep', power.sleep, [15, 30, 60, 120, 240, 0], minutes, (v) => setPower({ sleep: v })),
   );
   return rows;
+}
+
+const SAVER_STYLES = { photo: 'Photos of the day', colour: 'Clock on colour', dark: 'Clock on black' };
+
+// The weather's town: typed with the TV's keyboard (or a real one) and
+// looked up with Open-Meteo's town search.
+function chooseWeather() {
+  openSheet('Weather for which town?', [
+    { input: true, label: 'Town', run: searchWeather },
+    ...(prefs.weatherPlace ? [{ label: 'Turn off weather', run: () => { closeSheet(); savePref('weatherPlace', null); } }] : []),
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+async function searchWeather() {
+  const name = sheet?.buttons[0]?.value?.trim();
+  if (!name) return;
+  leaveField();
+  const r = await api.places(name);
+  if (!r.ok) { toast(r.error || 'Couldn’t search right now'); return; }
+  if (!r.result.length) { toast(`No town called “${name}”`); return; }
+  openSheet('Which one?', [
+    ...r.result.map((p) => ({ label: p.region ? `${p.name} · ${p.region}` : p.name,
+      run: () => { closeSheet(); savePref('weatherPlace', { name: p.name, latitude: p.latitude, longitude: p.longitude }); } })),
+    { label: 'Cancel', run: closeSheet },
+  ]);
 }
 
 async function setPower(change) {
@@ -936,9 +1194,13 @@ function touched() { lastInput = Date.now(); }
 function showLock(askWho = false) {
   if (lock) { lock.askWho ||= askWho; return; }
   closeSheet();
-  lock = { since: Date.now(), askWho, timer: 0, tick: 0, spot: 0, hue: 0, flip: false };
+  // "Photos": the home screen's own picture comes alive (D-32).
+  const photo = prefs.screenSaverStyle === 'photo' && walls.length > 0;
+  lock = { since: Date.now(), askWho, timer: 0, tick: 0, spot: 0, hue: 0, flip: false, photo };
   const el = $('lock');
   el.dataset.spot = '0';
+  el.classList.toggle('photo', photo);
+  if (photo) { document.body.classList.add('saver'); startDrift(); }
   paintLock();
   el.classList.remove('hidden');
   const hint = $('lock-hint');
@@ -952,8 +1214,10 @@ function paintLock() {
   const now = new Date();
   $('lock-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   $('lock-date').textContent = now.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
-  // Colour: the home screen's apps, one after another, crossfading.
-  const palette = rows.flat().filter((a) => a.colors?.length);
+  // Photos: the next picture every third minute. Colour: the home screen's
+  // apps, one after another, crossfading.
+  const palette = lock.photo ? [] : rows.flat().filter((a) => a.colors?.length);
+  if (lock.photo && lock.tick % 3 === 2) showWall(wallAt + 1);
   if (palette.length) {
     const it = palette[lock.hue++ % palette.length];
     const next = $(lock.flip ? 'lock-a' : 'lock-b');
@@ -986,6 +1250,10 @@ function wake() {
   lock = null;
   touched();
   $('lock').classList.add('hidden');
+  if (document.body.classList.contains('saver')) {
+    document.body.classList.remove('saver'); // the blur and the tiles come back
+    stopDrift();
+  }
   $('lock-clock').classList.remove('moving');
   if (askWho && profiles.length > 1) openPicker();
   return true;
@@ -1004,13 +1272,19 @@ function watchIdle() {
 (async function start() {
   const state = await api.getState();
   profiles = state.profiles || [];
+  profileColours = state.profileColours || {};
+  $('me').addEventListener('click', () => { focusMe(true); openProfileMenu(); });
   active = state.profile;
   usePrefs(state.prefs);
+  useArt(state.art);
+  setInterval(refreshWeather, 10 * 60000);
   appVersion = state.version || '';
   build(state);
   setFocus(0, 0, true);
   api.onState((s) => {
-    // New tiles arrive when a Store app was installed or removed.
+    if (s.art) useArt(s.art);
+    if (s.profiles) { profiles = s.profiles; paintMe(); if (meFocused) focusMe(true); }
+    // New tiles arrive when a Store app was installed or removed, or a logo was downloaded.
     if (s.apps) {
       const id = current()?.id;
       build({ ...s, running: s.running });

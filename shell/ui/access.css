@@ -23,6 +23,7 @@ body.reduce-motion.layer * { transition: none !important; animation: none !impor
 /* High contrast: white on black, solid panels with white edges, and a thick
    yellow mark on whatever has the focus. */
 body.high-contrast { --dim: #fff; --glass: #000; --glass-edge: #fff; --edge: #fff; --panel: #000; }
+body.high-contrast #wall,
 body.high-contrast .art,
 body.high-contrast .shade,
 body.high-contrast .lock-shade,
