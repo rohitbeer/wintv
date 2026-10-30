@@ -79,3 +79,10 @@ Edge's uninstaller only accepts Settings, not a script (D-17). Once, as
 admin: Settings > About > Repair mode (press OK seven times on "WinTV" to
 show it), sign in as admin, then **Settings > Apps > Installed apps >
 Microsoft Edge > Uninstall**. Then sign out and choose **TV**.
+
+## License
+
+MIT, see `LICENSE`. WinTV installs third-party software it does not
+include in this repository: Windows (Microsoft's own media and licence),
+Brave (downloaded and hash-checked at build time) and, in the test VM, the
+virtio drivers.
