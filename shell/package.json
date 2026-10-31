@@ -1,7 +1,7 @@
 {
   "name": "wintv-shell",
   "productName": "WinTV",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "WinTV shell: the whole TV interface of Windows for the tv account (home, system layer, settings), in place of Explorer",
   "main": "main.js",
   "private": true,
