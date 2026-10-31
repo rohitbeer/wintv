@@ -92,6 +92,7 @@ const api = window.wintv || {
   onDrives: () => {},
   onPad: () => {},
   onPadNative: () => {},
+  onApps: () => {},
 };
 
 // Files in a plain browser: a few folders, a USB stick and a Recycle Bin.
@@ -566,18 +567,26 @@ async function openAllApps() {
   const r = await api.apps();
   if (!allApps) return;
   if (!r.ok) { $('aa-groups').innerHTML = ''; toast(r.error || 'Couldn’t list the apps'); return; }
+  renderAllApps(r.result);
+}
+
+// Also when the list changed behind the open screen (D-49): the focus stays
+// on the same app.
+function renderAllApps(apps) {
+  const keep = allApps.list[allApps.index]?.id;
   const byName = (a, b) => a.name.localeCompare(b.name);
   // WinTV's own apps first: the home screen's tiles (streaming, browser…).
   const tvApps = (rows[0] || []).filter((a) => a.kind !== 'start').map((a) => ({ id: a.id, name: a.name, tile: a }));
   const groups = [
     ['TV apps', tvApps],
-    ['Apps', r.result.filter((a) => !a.tool && !a.desktopOnly).sort(byName)],
-    ['Windows tools', r.result.filter((a) => a.tool && !a.desktopOnly).sort(byName)],
-    ['Only on the Windows desktop', r.result.filter((a) => a.desktopOnly).sort(byName)],
+    ['Apps', apps.filter((a) => !a.tool && !a.desktopOnly).sort(byName)],
+    ['Windows tools', apps.filter((a) => a.tool && !a.desktopOnly).sort(byName)],
+    ['Only on the Windows desktop', apps.filter((a) => a.desktopOnly).sort(byName)],
   ].filter(([, list]) => list.length);
   const box = $('aa-groups');
   box.innerHTML = '';
   allApps.list = [];
+  allApps.tiles = [];
   for (const [title, list] of groups) {
     const h = document.createElement('h3');
     h.textContent = title;
@@ -613,7 +622,8 @@ async function openAllApps() {
       allApps.tiles.push(t);
     }
   }
-  focusAllApps(0);
+  const at = keep ? allApps.list.findIndex((a) => a.id === keep) : -1;
+  focusAllApps(at >= 0 ? at : 0);
 }
 
 function closeAllApps() {
@@ -1443,7 +1453,10 @@ const WALL_SPEED = 0.5;
 
 const wallVideo = () => $(wallFlip ? 'wall-b' : 'wall-a'); // the one on screen
 
+let artInfo = {}; // how far the wallpaper download is (D-52)
+
 function useArt(a) {
+  artInfo = a || {};
   const before = walls[wallAt]?.url;
   walls = a?.videos || [];
   document.body.classList.toggle('has-wall', walls.length > 0);
@@ -1974,8 +1987,16 @@ function saverRows(power) {
   const rows = [
     pick('Screen saver', prefs.screenSaverMinutes, [2, 5, 10, 15, 30, 0], minutes, (v) => savePref('screenSaverMinutes', v)),
     pick('Style', prefs.screenSaverStyle, Object.keys(SAVER_STYLES), (v) => SAVER_STYLES[v], (v) => savePref('screenSaverStyle', v)),
-    { kind: 'action', label: 'Weather', value: prefs.weatherPlace?.name || 'Off', press: chooseWeather },
   ];
+  // The live wallpapers come from Wikimedia Commons after the install: until
+  // one is in, the screen saver is the clock alone (D-52).
+  const have = walls.length;
+  const total = artInfo.total || have;
+  if (prefs.screenSaverStyle === 'live' && total) {
+    const doing = have >= total ? 'all here' : artInfo.busy ? 'downloading…' : artInfo.online === false ? 'waiting for the internet' : 'downloading soon';
+    rows.push({ kind: 'info', label: 'Wallpaper videos', value: have >= total ? `${have}, all here` : `${have} of ${total}, ${doing}` });
+  }
+  rows.push({ kind: 'action', label: 'Weather', value: prefs.weatherPlace?.name || 'Off', press: chooseWeather });
   if (profiles.length > 1) {
     rows.push(pick('Ask who’s watching', prefs.askWhoMinutes, [15, 30, 60, 120, 0], (m) => (m ? `${minutes(m)} away` : 'Never'),
       (v) => savePref('askWhoMinutes', v)));
@@ -2415,6 +2436,7 @@ function watchIdle() {
   padNative = state.padNative === true;
   api.onPadNative((on) => { padNative = on === true; });
   api.onPad(padPress);
+  api.onApps((list) => { if (allApps?.tiles.length) renderAllApps(list); });
   api.onFiles((root) => {
     wake();
     closeSheet();

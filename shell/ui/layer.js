@@ -85,6 +85,23 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('mousemove', () => document.body.classList.add('pointer'));
 
+// Mouse clicks (D-53): this window never takes the focus from the app, and
+// Chromium eats clicks on such a window, so input.ps1 takes a click while the
+// pointer is over a panel and it arrives here: what is under the pointer is
+// clicked, through the same handlers as a real click.
+let pointerAt = null;
+let pointerOver = false;
+function trackPointer() {
+  const el = pointerAt && document.elementFromPoint(pointerAt.x, pointerAt.y);
+  const over = !!el?.closest('#quick:not(.hidden), #kb:not(.hidden), #notice:not(.hidden)');
+  if (over !== pointerOver) { pointerOver = over; api.pointer?.(over); }
+}
+window.addEventListener('mousemove', (e) => { pointerAt = { x: e.clientX, y: e.clientY }; trackPointer(); });
+document.addEventListener('mouseout', (e) => { if (!e.relatedTarget) { pointerAt = null; trackPointer(); } }); // off the panels
+api.onClick?.(() => { const el = pointerAt && document.elementFromPoint(pointerAt.x, pointerAt.y); el?.click(); });
+api.onShow(() => setTimeout(trackPointer, 60));
+api.onHide(() => setTimeout(trackPointer, 60));
+
 // ------------------------------------------------------------------ quick settings
 // Like tvOS's Control Center or Google TV's dashboard: the few things you
 // change mid-film, without leaving it.

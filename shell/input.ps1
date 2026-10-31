@@ -12,12 +12,14 @@
 #   {"ev":"device","kind":"remote"}                      a remote or a keyboard was first used (once each)
 #   {"ev":"pad","b":"ok","down":true,"repeat":false}     a PlayStation controller (D-45, see WinTV.Pads)
 #   {"ev":"pad-open","name":"DualSense","bt":true}       ... and one was found
+#   {"ev":"click"}                                       a left click on the system layer's panel (D-53)
 #   {"ev":"ready","hook":true,"uia":true}
 # In (one JSON object per line):
 #   {"op":"grab","on":true}        arrows/OK/Back go to the system layer instead of the app
 #   {"op":"type","text":"abc"}     type into whatever has the focus
 #   {"op":"key","key":"backspace"} backspace | enter | left | right | up | down | escape | browserback | tab | f11 | address (Ctrl+L)
 #   {"op":"wheel","notches":-1}    the mouse wheel in the app in front (negative = down)
+#   {"op":"mouse-over","on":true}  the pointer is over one of the layer's panels (D-53)
 #   {"op":"screen-off"}            picture off; any button brings it back
 #
 # Privacy: the hook sees every key pressed in this session, as any keyboard
@@ -57,7 +59,8 @@ namespace WinTV {
         [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
         [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
 
-        const int WH_KEYBOARD_LL = 13;
+        const int WH_KEYBOARD_LL = 13, WH_MOUSE_LL = 14;
+        const int WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202;
         const int WM_KEYDOWN = 0x100, WM_KEYUP = 0x101, WM_SYSKEYDOWN = 0x104, WM_SYSKEYUP = 0x105;
         const uint KEYEVENTF_EXTENDEDKEY = 0x1, KEYEVENTF_KEYUP = 0x2, KEYEVENTF_UNICODE = 0x4;
         // Marks the keys this process types, so the hook lets them through untouched.
@@ -78,6 +81,9 @@ namespace WinTV {
 
         // ------------------------------------------------------------ hook
         static HookProc proc;           // kept referenced, or the GC frees it under Windows' feet
+        static HookProc mouseProc;
+        static volatile bool mouseOver; // the pointer is over a panel of the system layer
+        static bool eatUp;              // the button-up of a click that went to the layer
         static volatile bool grab;
         static long grabUsed;           // last time a grabbed key arrived (ticks)
         static readonly bool[] held = new bool[256];
@@ -105,6 +111,8 @@ namespace WinTV {
             var t = new Thread(() => {
                 proc = Hook;
                 ok = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(null), 0) != IntPtr.Zero;
+                mouseProc = MouseHook;
+                if (ok) SetWindowsHookEx(WH_MOUSE_LL, mouseProc, GetModuleHandle(null), 0); // clicks on the layer: as good as it gets without
                 ready.Set();
                 MSG m;
                 while (ok && GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { }
@@ -125,6 +133,28 @@ namespace WinTV {
                 grab = false;
                 Line("{\"ev\":\"grab-expired\"}");
             }
+        }
+
+        public static void SetMouseOver(bool on) { mouseOver = on; }
+
+        // Clicks on the system layer (D-53). Its window never takes the focus
+        // from the app (so typing lands in the app's field), and Chromium eats
+        // clicks on such a window: hover works, a click does nothing (seen on the
+        // first real PC, then on a test VM). While a panel is up (grab) and under the
+        // pointer, the click is taken here and handed to the layer, which
+        // clicks what is under the pointer. Anywhere else it is left alone.
+        static IntPtr MouseHook(int code, IntPtr wParam, IntPtr lParam) {
+            if (code >= 0) {
+                int msg = wParam.ToInt32();
+                if (msg == WM_LBUTTONDOWN && grab && mouseOver) {
+                    eatUp = true;
+                    grabUsed = DateTime.UtcNow.Ticks;
+                    Line("{\"ev\":\"click\"}");
+                    return (IntPtr)1;
+                }
+                if (msg == WM_LBUTTONUP && eatUp) { eatUp = false; return (IntPtr)1; }
+            }
+            return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
         }
 
         static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -191,6 +221,15 @@ namespace WinTV {
                     return (IntPtr)1;
                 }
 
+                // Typing on a real keyboard: say so (not what), at most once a second,
+                // whether WinTV's keyboard is up or not: while someone types, it
+                // stays away (D-50; only noticed while it was up before, so a
+                // keyboard user got it again at every text field).
+                if (down && Printable(k.vk) && DateTime.UtcNow.Ticks - lastTyping > TimeSpan.TicksPerSecond) {
+                    lastTyping = DateTime.UtcNow.Ticks;
+                    Line("{\"ev\":\"hwtype\"}");
+                }
+
                 // While the system layer is up, the remote drives it, not the app.
                 if (grab) {
                     string name = Grabbed(k.vk);
@@ -199,11 +238,6 @@ namespace WinTV {
                         grabUsed = DateTime.UtcNow.Ticks;
                         if (down) Key(name, true, repeat);
                         return (IntPtr)1;
-                    }
-                    // Typing on a real keyboard: say so (not what), at most once a second.
-                    if (down && Printable(k.vk) && DateTime.UtcNow.Ticks - lastTyping > TimeSpan.TicksPerSecond) {
-                        lastTyping = DateTime.UtcNow.Ticks;
-                        Line("{\"ev\":\"hwtype\"}");
                     }
                 }
             } catch { /* never block input because of our own bug */ }
@@ -543,6 +577,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             'type'       { [WinTV.Input]::Type([string]$req.text) }
             'key'        { [WinTV.Input]::Press([string]$req.key) }
             'wheel'      { [WinTV.Input]::Wheel([int]$req.notches) }
+            'mouse-over' { [WinTV.Input]::SetMouseOver([bool]$req.on) }
             'screen-off' { [WinTV.Input]::ScreenOff() }
             default      { throw "unknown op '$($req.op)'" }
         }

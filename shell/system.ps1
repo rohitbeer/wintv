@@ -651,6 +651,107 @@ namespace WinTV {
 }
 '@
 
+# Pairing the way Windows' own Settings pairs (WinRT
+# DeviceInformationCustomPairing), with WinTV answering the question Windows
+# would ask on screen: the classic BluetoothAuthenticateDeviceEx answered
+# 1244 (not authenticated) for a DualSense on the first real PC (D-51).
+# Compiled on its own: if it doesn't compile, the classic way is still there.
+$BtLog = Join-Path $env:LOCALAPPDATA 'WinTV\bluetooth.log'
+function Write-BtLog([string]$Text) {
+    try { Add-Content -Path $BtLog -Value ((Get-Date -Format s) + ' ' + $Text) -Encoding UTF8 } catch { }
+}
+$WinRtPair = $null   # compiled on the first pairing: $true, or $false if it can't be
+function Initialize-WinRtPair {
+    if ($null -ne $script:WinRtPair) { return }
+    $script:WinRtPair = $false
+    try {
+        $meta = Join-Path $env:SystemRoot 'System32\WinMetadata'
+        $rt = [Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+        # Straight to the compiler: Add-Type's own reference list can't load .winmd files.
+        $cp = New-Object System.CodeDom.Compiler.CompilerParameters
+        $cp.GenerateInMemory = $true
+        foreach ($r in 'System.dll', (Join-Path $meta 'Windows.Devices.winmd'), (Join-Path $meta 'Windows.Foundation.winmd'), (Join-Path $rt 'System.Runtime.dll'), (Join-Path $rt 'System.Runtime.InteropServices.WindowsRuntime.dll')) {
+            [void]$cp.ReferencedAssemblies.Add($r)
+        }
+        Add-Type -CompilerParameters $cp -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Threading;
+using Windows.Devices.Bluetooth;
+using Windows.Devices.Enumeration;
+using Windows.Foundation;
+namespace WinTV {
+    public static class BtPair {
+        // Windows' async calls, waited for by asking their status: AsTask
+        // needs a contract file that PCs don't have (seen on VM 223).
+        static bool Wait(IAsyncInfo op, int ms) {
+            for (int t = 0; t < ms; t += 50) {
+                if (op.Status != AsyncStatus.Started) return true;
+                Thread.Sleep(50);
+            }
+            op.Cancel();
+            return false;
+        }
+
+        static string Why(IAsyncInfo op) {
+            return op.ErrorCode != null ? op.ErrorCode.Message : op.Status.ToString();
+        }
+
+        // Windows' answer (Paired, AlreadyPaired, AuthenticationTimeout...),
+        // and what it asked; NotFound / Unavailable: when it can't try.
+        public static string Pair(ulong address) {
+            BluetoothDevice dev;
+            try {
+                var find = BluetoothDevice.FromBluetoothAddressAsync(address);
+                if (!Wait(find, 15000)) return "Unavailable: no answer";
+                if (find.Status != AsyncStatus.Completed) return "Unavailable: " + Why(find);
+                dev = find.GetResults();
+            } catch (Exception e) { return "Unavailable: " + e.GetBaseException().Message; }
+            if (dev == null) return "NotFound";
+            string asked = "";
+            try {
+                var pairing = dev.DeviceInformation.Pairing;
+                if (pairing.IsPaired) return "AlreadyPaired";
+                var custom = pairing.Custom;
+                TypedEventHandler<DeviceInformationCustomPairing, DevicePairingRequestedEventArgs> answer = (s, e) => {
+                    asked += " " + e.PairingKind;
+                    if (e.PairingKind == DevicePairingKinds.ProvidePin) e.Accept("0000"); else e.Accept();
+                };
+                custom.PairingRequested += answer;
+                try {
+                    var kinds = DevicePairingKinds.ConfirmOnly | DevicePairingKinds.ConfirmPinMatch | DevicePairingKinds.DisplayPin | DevicePairingKinds.ProvidePin;
+                    var pair = custom.PairAsync(kinds, DevicePairingProtectionLevel.None);
+                    if (!Wait(pair, 45000)) return "AuthenticationTimeout; asked" + asked;
+                    if (pair.Status != AsyncStatus.Completed) return "Failed: " + Why(pair) + "; asked" + asked;
+                    return pair.GetResults().Status + "; asked" + asked;
+                } finally { custom.PairingRequested -= answer; }
+            } catch (Exception e) {
+                return "Failed: " + e.GetBaseException().Message + "; asked" + asked;
+            } finally { dev.Dispose(); }
+        }
+    }
+}
+'@
+        $script:WinRtPair = $true
+    } catch { Write-BtLog ('Windows pairing not available: ' + $_.Exception.Message) }
+}
+
+function Invoke-BtPair([string]$Address) {
+    Initialize-WinRtPair
+    if ($script:WinRtPair) {
+        $r = [WinTV.BtPair]::Pair([WinTV.Bluetooth]::Parse($Address))
+        Write-BtLog "pair $Address with Windows' pairing: $r"
+        if ($r -match '^(Paired|AlreadyPaired)\b') { return }
+        if ($r -match '^(AuthenticationTimeout|NotReadyToPair|ConnectionRejected|PairingCanceled)\b') {
+            throw 'It stopped waiting: put it in pairing mode again (PS5 controller: hold PS and Create until the light flashes) and pick it at once'
+        }
+        if ($r -match '^AccessDenied\b') { throw "Windows didn't let the TV account pair it: pair it once on the Windows desktop (Settings > Admin)" }
+        if ($r -notmatch '^(NotFound|Unavailable)\b') { throw ("Didn't pair (" + ($r -split ';')[0] + '): put it in pairing mode and try again') }
+    }
+    $e = [WinTV.Bluetooth]::Pair($Address)
+    Write-BtLog "pair $Address the classic way: $(if ($e) { $e } else { 'paired' })"
+    if ($e) { throw $e }
+}
+
 function Get-BtDevices([bool]$Search) {
     $list = $null
     if ([WinTV.Bluetooth]::List($Search, [ref]$list) -eq [WinTV.Bluetooth]::NoRadio) { return @{ radio = $false } }
@@ -688,6 +789,10 @@ function Find-Logo([string]$Root, $App) {
     $null
 }
 
+# What a package's manifest or a program's file says about each app, per
+# version: read once per session, as All apps asks again each time (D-49).
+$AppFacts = @{}
+
 function Get-AppList {
     New-Item -ItemType Directory -Force $IconDir | Out-Null
     $packages = @{}
@@ -707,14 +812,24 @@ function Get-AppList {
         if ($id -match '^([^!]+)!(.+)$' -and $packages[$matches[1]]) {
             $pkg = $packages[$matches[1]]
             $appId = $matches[2]
-            $app = @(([xml](Get-Content (Join-Path $pkg.InstallLocation 'AppxManifest.xml') -Raw)).Package.Applications.Application) |
-                Where-Object { $_.Id -eq $appId } | Select-Object -First 1
-            # Packaged desktop apps (Notepad, Terminal) run on the TV; the older
-            # kind needs Explorer's window host (D-19).
-            $desktopOnly = [bool]$app -and $app.EntryPoint -ne 'Windows.FullTrustApplication'
-            if ($app) { $logo = Find-Logo $pkg.InstallLocation $app }
-        } elseif ($targets[$id] -match '\.exe$' -and [WinTV.Apps]::NeedsAdmin($targets[$id])) {
-            $desktopOnly = $true # asks for admin rights (D-42)
+            $key = $pkg.PackageFullName + '!' + $appId
+            if (-not $AppFacts.ContainsKey($key)) {
+                $app = @(([xml](Get-Content (Join-Path $pkg.InstallLocation 'AppxManifest.xml') -Raw)).Package.Applications.Application) |
+                    Where-Object { $_.Id -eq $appId } | Select-Object -First 1
+                # Packaged desktop apps (Notepad, Terminal) run on the TV; the older
+                # kind needs Explorer's window host (D-19).
+                $only = [bool]$app -and $app.EntryPoint -ne 'Windows.FullTrustApplication'
+                $found = $null
+                if ($app) { $found = Find-Logo $pkg.InstallLocation $app }
+                $AppFacts[$key] = @{ desktopOnly = $only; logo = $found }
+            }
+            $desktopOnly = $AppFacts[$key].desktopOnly
+            $logo = $AppFacts[$key].logo
+        } elseif ($targets[$id] -match '\.exe$') {
+            $exe = $targets[$id]
+            $key = $exe + '|' + [IO.File]::GetLastWriteTimeUtc($exe).Ticks
+            if (-not $AppFacts.ContainsKey($key)) { $AppFacts[$key] = @{ desktopOnly = [WinTV.Apps]::NeedsAdmin($exe) } }
+            $desktopOnly = $AppFacts[$key].desktopOnly # asks for admin rights (D-42)
         }
         $icon = (Get-IconName $id) + '.png'
         $file = Join-Path $IconDir $icon
@@ -897,7 +1012,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             'wifi.scan'   { Get-WifiNetworks }
             'bt.list'     { Get-BtDevices $false }
             'bt.scan'     { Get-BtDevices $true }
-            'bt.pair'     { $e = [WinTV.Bluetooth]::Pair([string]$req.address); if ($e) { throw $e }; Get-BtDevices $false }
+            'bt.pair'     { Invoke-BtPair ([string]$req.address); Get-BtDevices $false }
             'bt.forget'   { $e = [WinTV.Bluetooth]::Forget([string]$req.address); if ($e) { throw $e }; Get-BtDevices $false }
             'wifi.allow'  { Set-WifiConsent; Get-WifiNetworks }
             'wifi.connect' {

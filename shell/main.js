@@ -8,7 +8,7 @@
 // It must never quit on its own, must survive its own crashes, and is the
 // only way to start anything.
 
-const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen, systemPreferences, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen, systemPreferences, nativeImage, net: electronNet } = require('electron');
 
 // First thing: an error while starting must end this process (the
 // supervisor then restarts it or rolls back), not leave Electron's
@@ -134,11 +134,50 @@ let knownApps = new Map(); // AppID -> { name, icon }
 const appKey = (appId) => crypto.createHash('sha1').update(appId).digest('hex').slice(0, 16);
 const iconUrl = (appId) => `wintv://ui/cache/icons/${appKey(appId)}.png`;
 
+// Asking Windows takes seconds (every package's manifest, every program's
+// file), so All apps shows the last list at once, kept on disk too, and asks
+// again behind it; a change is sent to the open screen (D-49).
+let appsList = null;
+let appsAsking = null;
+const appsFile = () => path.join(app.getPath('userData'), 'apps.json');
+const appsOut = (list) => list.map((a) => ({ ...a, icon: a.icon ? iconUrl(a.id) : null }));
+const appOk = (a) => !!a && typeof a.id === 'string' && typeof a.name === 'string';
+
+function loadApps() {
+  const list = readJson(appsFile());
+  if (!Array.isArray(list) || !list.every(appOk)) return;
+  appsList = list;
+  knownApps = new Map(list.map((a) => [a.id, a]));
+}
+
+function askApps() {
+  if (appsAsking) return appsAsking;
+  const started = Date.now();
+  appsAsking = system('apps.list', {}, 90000).then((r) => { // the first time draws every icon
+    appsAsking = null;
+    if (!r.ok) return r;
+    const list = r.result.apps;
+    log('apps:', list.length, 'listed in', Date.now() - started, 'ms');
+    const shown = appsList !== null;
+    const changed = JSON.stringify(list) !== JSON.stringify(appsList);
+    appsList = list;
+    knownApps = new Map(list.map((a) => [a.id, a]));
+    if (changed) {
+      try {
+        fs.writeFileSync(appsFile() + '.tmp', JSON.stringify(list));
+        fs.renameSync(appsFile() + '.tmp', appsFile());
+      } catch (e) { log('apps: cannot save:', e.message); }
+      if (shown && win && !win.isDestroyed()) win.webContents.send('apps', appsOut(list));
+    }
+    return { ok: true, result: appsOut(list) };
+  });
+  return appsAsking;
+}
+
 async function listApps() {
-  const r = await system('apps.list', {}, 90000); // the first time draws every icon
-  if (!r.ok) return r;
-  knownApps = new Map(r.result.apps.map((a) => [a.id, a]));
-  return { ok: true, result: r.result.apps.map((a) => ({ ...a, icon: a.icon ? iconUrl(a.id) : null })) };
+  if (!appsList) return askApps();
+  askApps(); // fresh behind the list shown now
+  return { ok: true, result: appsOut(appsList) };
 }
 
 function pinsOf(profileId) {
@@ -161,9 +200,14 @@ function logoUrl(name) {
 }
 
 function artState() {
+  const videos = art.videos(config.wallpapers).map(({ file, title, artist, license }) =>
+    ({ url: `wintv://ui/cache/videos/${file}`, title, artist, license }));
   return {
-    videos: art.videos(config.wallpapers).map(({ file, title, artist, license }) =>
-      ({ url: `wintv://ui/cache/videos/${file}`, title, artist, license })),
+    videos,
+    // How far the download is, for Settings > Screen Saver (D-52).
+    total: videos.length + art.videosMissing(config.wallpapers),
+    busy: artBusy,
+    online: electronNet.isOnline(),
   };
 }
 
@@ -197,9 +241,16 @@ async function refreshArt() {
   try { if (await art.refreshLogos([...config.apps, ...config.system].map((a) => a.logo).filter(Boolean))) redraw(); } catch (e) { log('art:', e.message); }
   try { await art.refreshVideos(config.wallpapers, redraw); } catch (e) { log('art:', e.message); }
   artBusy = false;
-  // Interrupted (offline, or Wikimedia asked to slow down): try again soon.
-  if (art.videosMissing(config.wallpapers)) setTimeout(refreshArt, 15 * 60000);
+  // Interrupted. Offline: again as soon as the TV is online (a fresh install
+  // starts offline, D-52); else Wikimedia asked to slow down: in 15 minutes.
+  if (art.videosMissing(config.wallpapers)) {
+    artWaitsForNet = !electronNet.isOnline();
+    if (!artWaitsForNet) setTimeout(refreshArt, 15 * 60000);
+  }
+  redraw(); // Settings > Screen Saver shows how far the download is
 }
+let artWaitsForNet = false;
+setInterval(() => { if (artWaitsForNet && electronNet.isOnline()) { artWaitsForNet = false; refreshArt(); } }, 30000);
 
 const fahrenheit = () => ['US', 'LR', 'MM'].includes(app.getLocaleCountryCode?.() || '');
 
@@ -721,6 +772,7 @@ function onInput(msg) {
   else if (msg.ev === 'grab-expired') { log('input: grab expired'); closeSurfaces(); }
   else if (msg.ev === 'device') deviceSeen(msg.kind);
   else if (msg.ev === 'pad') onPad(msg);
+  else if (msg.ev === 'click') { if ([...surfaces].some((s) => INTERACTIVE.includes(s))) layerSend('click'); } // D-53
   else if (msg.ev === 'pad-open') {
     log('pad:', msg.name, msg.bt ? 'over Bluetooth' : 'over USB');
     if (!padNative) { padNative = true; if (win && !win.isDestroyed()) win.webContents.send('pad-native', true); }
@@ -922,7 +974,7 @@ function openKeyboard(password, auto) {
 // the keyboard up, the way a TV does. Not while someone uses a real keyboard.
 function onTextFocus(msg) {
   if (msg.on) {
-    if (!config.keyboard.autoOpen || Date.now() - hwKeyboardAt < 10 * 60000) return;
+    if (!config.keyboard.autoOpen || Date.now() - hwKeyboardAt < 60 * 60000) return; // typed on a real one in the last hour (D-50)
     if (surfaces.has('quick') || surfaces.has('notice')) return;
     // Apps report the same field again as you type; the layer keeps its
     // place and only takes the password flag from a repeat.
@@ -1028,6 +1080,10 @@ const fromLayer = (fn) => (e, ...a) => (e.sender === layer?.webContents ? fn(...
 function layerIpc() {
   ipcMain.on('layer:close', (e, name) => {
     if (e.sender === layer?.webContents && SURFACES.includes(name)) closeSurface(name);
+  });
+  // The pointer over one of the layer's panels: input.ps1 hands its clicks here (D-53).
+  ipcMain.on('layer:pointer', (e, on) => {
+    if (e.sender === layer?.webContents) inputSend({ op: 'mouse-over', on: on === true });
   });
   ipcMain.handle('layer:type', fromLayer((text) => {
     // One key's worth (".com" is the longest), printable characters only.
@@ -1519,6 +1575,8 @@ function createWindow() {
   win.loadURL('wintv://ui/index.html');
   win.once('ready-to-show', () => {
     log('window ready');
+    loadApps();
+    setTimeout(askApps, 30000); // so the first All apps of this run has a fresh list too
     win.show();
     // Start the Settings helper in the background: PowerShell takes a second
     // or two to start, which would otherwise delay the first Settings page.

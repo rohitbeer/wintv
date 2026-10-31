@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('wintvLayer', {
   onHide: (cb) => ipcRenderer.on('hide', (_e, name) => cb(name)),
   onKey: (cb) => ipcRenderer.on('key', (_e, k) => cb(k)),
   onPrefs: (cb) => ipcRenderer.on('prefs', (_e, p) => cb(p)),
+  onClick: (cb) => ipcRenderer.on('click', () => cb()),
+  pointer: (on) => ipcRenderer.send('layer:pointer', on === true),
   close: (name) => ipcRenderer.send('layer:close', name),
   type: (text) => ipcRenderer.invoke('layer:type', text),
   key: (name) => ipcRenderer.invoke('layer:key', name),
