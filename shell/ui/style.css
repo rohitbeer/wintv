@@ -68,20 +68,20 @@ body.pointer { cursor: default; }
     radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0,0,0,.55) 100%);
 }
 
-/* ------------------------------------------------------------ wallpaper (D-32)
-   The picture of the day stands still behind the home screen, blurred and
-   darkened more towards the tiles. As the screen saver (body.saver) it
-   sharpens and drifts; app.js moves #wall-move. Without pictures (offline,
-   first start) the colour shelf above stays. */
+/* ------------------------------------------------------------ live wallpaper (D-35)
+   A video held on one frame behind the home screen, blurred and darkened
+   more towards the tiles. As the screen saver (body.saver) it plays sharp,
+   and stops smoothly on a button (app.js). Until the first clip is on the
+   TV, the colour shelf above stays. */
 #wall { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: #000; display: none; }
 body.has-wall #wall { display: block; }
 body.has-wall #shelf { display: none; }
 /* Parallax: zoomed in a little, the picture glides the other way as the
-   focus moves along the apps (app.js panWall). The screen saver's drift is
-   #wall-move, inside, so the two never fight. */
+   focus moves along the apps (app.js panWall). */
 #wall-pan { position: absolute; inset: 0; transform: scale(1.1); transition: transform 1.1s var(--ease); will-change: transform; }
-#wall-move { position: absolute; inset: 0; transform: scale(1.06); will-change: transform; }
+#wall-move { position: absolute; inset: 0; }
 .wall-img, #wall-blur { position: absolute; inset: 0; background: center / cover no-repeat; }
+video.wall-img { width: 100%; height: 100%; object-fit: cover; }
 .wall-img { opacity: 0; transition: opacity 2.4s var(--ease); }
 .wall-img.on { opacity: 1; }
 #wall-blur {
@@ -457,11 +457,11 @@ body.high-contrast #me.focused .avatar.mini { box-shadow: 0 0 0 .5vh #ffd60a; }
 #lock-weather { display: flex; align-items: center; gap: .8vw; margin-top: 1.2vh; font-size: calc(2.6vh * var(--ts, 1)); font-weight: 500; color: var(--dim); }
 #lock[data-spot="1"] #lock-weather, #lock[data-spot="2"] #lock-weather { justify-content: flex-end; }
 #lock-weather svg { width: calc(3.2vh * var(--ts, 1)); height: calc(3.2vh * var(--ts, 1)); }
-/* "Photos": the wallpaper itself is the screen saver; this layer only
-   carries the clock and the picture's credit. */
-#lock.photo { background: transparent; }
-#lock.photo .art { display: none; }
-#lock.photo .lock-shade { background: radial-gradient(70% 60% at 15% 100%, rgba(0, 0, 0, .45) 0%, transparent 70%), radial-gradient(70% 60% at 85% 0%, rgba(0, 0, 0, .35) 0%, transparent 70%); }
+/* "Live wallpapers": the wallpaper itself is the screen saver; this layer
+   only carries the clock and the clip's credit. */
+#lock.live { background: transparent; }
+#lock.live .art { display: none; }
+#lock.live .lock-shade { background: radial-gradient(70% 60% at 15% 100%, rgba(0, 0, 0, .45) 0%, transparent 70%), radial-gradient(70% 60% at 85% 0%, rgba(0, 0, 0, .35) 0%, transparent 70%); }
 #lock-credit {
   position: absolute;
   right: 3vw;
@@ -476,7 +476,7 @@ body.high-contrast #me.focused .avatar.mini { box-shadow: 0 0 0 .5vh #ffd60a; }
   text-shadow: 0 .2vh .8vh rgba(0, 0, 0, .6);
   display: none;
 }
-#lock.photo #lock-credit { display: block; }
+#lock.live #lock-credit { display: block; }
 #lock-hint {
   position: absolute;
   left: 50%;

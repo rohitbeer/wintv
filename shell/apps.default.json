@@ -1,5 +1,5 @@
 {
-  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. logo: a file name on Wikimedia Commons, downloaded by the TV (logoStyle wordmark = the logo replaces the name; logoWhite = drawn white). lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz.",
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. logo: a file name on Wikimedia Commons, downloaded by the TV (logoStyle wordmark = the logo replaces the name; logoWhite = drawn white). lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz. wallpapers: the live wallpapers, open-licensed videos on Wikimedia Commons by file name, with a short title (the TV downloads them, only 60 fps or more; author and licence come from Commons).",
   "browserCandidates": [
     "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -164,6 +164,108 @@
         "#5e5ce6",
         "#141433"
       ]
+    }
+  ],
+  "wallpapers": [
+    {
+      "file": "Sunset under the Golden Gate Bridge, February 10 2025.webm",
+      "title": "Sunset under the Golden Gate Bridge, San Francisco"
+    },
+    {
+      "file": "Trimble Glacier Aerial 2.webm",
+      "title": "Trimble Glacier from the air"
+    },
+    {
+      "file": "Aerial views of the coasts of Mallorca, Spain.webm",
+      "title": "The coast of Mallorca, Spain"
+    },
+    {
+      "file": "Snow with Blossom 20200329.webm",
+      "title": "Snow on spring blossom"
+    },
+    {
+      "file": "Kaneyamanotaki Waterfall Movie.webm",
+      "title": "Kaneyama Falls, Japan"
+    },
+    {
+      "file": "20250823 lake erie from sandusky ohio wm.webm",
+      "title": "Lake Erie at Sandusky, Ohio"
+    },
+    {
+      "file": "Soaring Through Fall- FPV Drone Captures Colorado's Vibrant Colors.webm",
+      "title": "Autumn in Colorado from the air"
+    },
+    {
+      "file": "Waves off of Hurricane Point Vista Point, Big Sur.webm",
+      "title": "Waves at Hurricane Point, Big Sur"
+    },
+    {
+      "file": "Hurricane Erin Seen From International Space Station - 8-19-2025 (jsc2025m000148).webm",
+      "title": "Hurricane Erin from the International Space Station"
+    },
+    {
+      "file": "2022-10-01, Spring Lake of King County, Washington.webm",
+      "title": "Spring Lake, Washington"
+    },
+    {
+      "file": "Водоспад Та́рничин.webm",
+      "title": "Tarnychyn waterfall, Ukraine"
+    },
+    {
+      "file": "2022-08-06, Pacific Ocean sunset (Ocean Shores, Washington), 01.webm",
+      "title": "Sunset at Ocean Shores, Washington"
+    },
+    {
+      "file": "Trimble Glacier Aerial 3.webm",
+      "title": "Trimble Glacier, flying up the ice"
+    },
+    {
+      "file": "Panorama bei Plamort 31072017 60FPS.webm",
+      "title": "Alpine meadow at Plamort"
+    },
+    {
+      "file": "Oregon Coast Odyssey- FPV Drone Captures Stunning Ocean Views.webm",
+      "title": "The Oregon coast from the air"
+    },
+    {
+      "file": "Snow falling in Charlton MA 2025-12-14.webm",
+      "title": "Snowfall in Charlton, Massachusetts"
+    },
+    {
+      "file": "Blick auf die Donau in Ulm, Deutschland.webm",
+      "title": "The Danube at Ulm, Germany"
+    },
+    {
+      "file": "Zeitraffer – Wolken über Hof (Saale) kommen und gehen 20240523.webm",
+      "title": "Clouds over Hof, Germany"
+    },
+    {
+      "file": "Дарваївські водоспади біля с. Кропивник.webm",
+      "title": "Darvaivski waterfalls, Ukraine"
+    },
+    {
+      "file": "Sunset at Naked Creek Overlook Shenandoah National Park VA 2024-10-11.60fps.uhd4k.webm",
+      "title": "Sunset over the Shenandoah Valley, Virginia"
+    },
+    {
+      "file": "Cocoa Beach (May 2023) and Pier.webm",
+      "title": "Cocoa Beach, Florida"
+    },
+    {
+      "file": "Trimble Glacier Aerial 1.webm",
+      "title": "Trimble Glacier, crevasses"
+    },
+    {
+      "file": "Blick auf See 4K UHD 60FPS 21052019.webm",
+      "title": "A lake in spring"
+    },
+    {
+      "file": "Водоспад Під Комином верхній (2).webm",
+      "title": "Pid Komynom waterfall, Ukraine"
+    },
+    {
+      "file": "2022-08-06, Pacific Ocean sunset (Ocean Shores, Washington), 03.webm",
+      "title": "Dusk at Ocean Shores, Washington"
     }
   ]
 }

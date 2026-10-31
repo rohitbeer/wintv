@@ -42,9 +42,9 @@ const api = window.wintv || {
     const prefs = { screenSaverMinutes: Number(q.get('lock') || cfg.lockScreen.afterMinutes), screenSaverStyle: q.get('saver') || 'colour',
       askWhoMinutes: cfg.lockScreen.askWhoAfterMinutes, navSounds: 'normal', textSize: q.get('text') || 'default',
       reduceMotion: q.has('still'), highContrast: q.has('contrast') };
-    // ?wall=<picture url> and ?logos (served at ../logos/<id>.png) try the downloaded art.
+    // ?wall=<video url> and ?logos (served at ../logos/<id>.png) try the downloaded art.
     const logo = (list) => list.map((a) => ({ ...a, logo: q.has('logos') && a.logo ? `../logos/${a.id}.png` : null, logoStyle: a.logoStyle || 'icon' }));
-    const art = { wallpapers: q.has('wall') ? [{ url: q.get('wall'), title: 'Sunrays through fog near Walchwil, Switzerland', artist: 'A photographer', license: 'CC BY-SA 4.0' }] : [] };
+    const art = { videos: q.has('wall') ? [{ url: q.get('wall'), title: 'Landwasser Viaduct, Switzerland', artist: 'A videographer', license: 'CC BY-SA 4.0' }] : [] };
     return { apps: logo(tag(cfg.apps, 0)), system: tag(cfg.system, 1), running: ['youtube'], browser: 'brave', user: 'preview',
       profiles: cfg.profiles || [], profile: null, prefs: { ...prefs, weatherPlace: q.has('weather') ? { name: 'Dublin' } : null }, art,
       profileColours: { orange: ['#ff9f0a', '#5a2a00'], green: ['#30d158', '#0b3d1c'], blue: ['#0a84ff', '#06224a'] } };
@@ -619,63 +619,138 @@ function clock() {
   setTimeout(clock, 1000 * (60 - new Date().getSeconds()));
 }
 
-// ------------------------------------------------------------------ wallpaper
-// The picture of the day from Wikimedia Commons (art.js downloads them). On
-// the home screen it stands still, blurred towards the tiles; as the screen
-// saver it sharpens and drifts, and waking slows it to a stop where it is,
-// the way a Mac's lock screen does (D-32).
-let walls = [];        // [{ url, title, artist, license }], newest first
-let wallAt = -1;       // the one on screen
+// ------------------------------------------------------------------ live wallpaper
+// Open-licensed videos from Wikimedia Commons (apps.json "wallpapers";
+// art.js downloads them). On the home screen one clip holds still on a
+// frame, blurred towards the tiles. As the screen saver it plays, clip after
+// clip; the moment someone presses a button it slows to a stop on the frame
+// it is showing, and that frame stays as the wallpaper, the way a Mac's
+// lock screen does (D-35).
+let walls = [];        // [{ url, title, artist, license }]
+let wallAt = -1;       // the clip on screen
 let wallFlip = false;
-let drift = null;      // the screen saver's slow pan and zoom
+let rateRamp = 0;      // the running change of speed (animation frame id)
+let clipTimer = 0;     // moves the screen saver on from a long clip
+const CLIP_MAX_MS = 3 * 60000;
+// Half speed, for a cinematic slow motion: the clips are 60 fps, so this
+// still shows 30 new frames a second, each held for exactly two refreshes
+// of a 60 Hz TV (any other fraction would hold some frames longer).
+const WALL_SPEED = 0.5;
+
+const wallVideo = () => $(wallFlip ? 'wall-b' : 'wall-a'); // the one on screen
 
 function useArt(a) {
   const before = walls[wallAt]?.url;
-  walls = a?.wallpapers || [];
+  walls = a?.videos || [];
   document.body.classList.toggle('has-wall', walls.length > 0);
   panWall();
   const keep = walls.findIndex((w) => w.url === before);
   if (keep >= 0) wallAt = keep;
-  else if (walls.length) showWall(0);
+  else if (walls.length) showWall(Math.floor(Date.now() / 86400000) % walls.length, false); // a different clip each day
 }
 
-function loadImage(url) {
-  const img = new Image();
-  img.src = url;
-  return img.decode().then(() => img);
+// Loads a clip into a hidden element and waits until it has a frame to show:
+// held a third of the way in, or from the start to play.
+function loadClip(video, url, still) {
+  return new Promise((resolve, reject) => {
+    const done = (ok) => {
+      video.onloadeddata = video.onseeked = video.onerror = null;
+      if (ok) resolve(); else reject(new Error('cannot play'));
+    };
+    video.onerror = () => done(false);
+    video.onloadeddata = () => {
+      if (!still) { done(true); return; }
+      video.onseeked = () => done(true);
+      video.currentTime = video.duration * 0.33;
+    };
+    video.src = url;
+    video.load();
+  });
 }
 
-// The blur behind the tiles is drawn once, small, instead of a live blur
-// filter over a 4K picture on every frame.
-function blurred(img) {
+// The blur behind the tiles is drawn once from the held frame, small,
+// instead of a live blur filter over the video on every frame.
+function blurred(src) {
   const c = document.createElement('canvas');
   c.width = 640;
   c.height = 360;
   const g = c.getContext('2d');
   g.filter = 'blur(9px) saturate(1.25) brightness(.78)';
-  const s = Math.max(c.width / img.naturalWidth, c.height / img.naturalHeight) * 1.08;
-  const w = img.naturalWidth * s;
-  const h = img.naturalHeight * s;
-  g.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+  const w0 = src.videoWidth || src.naturalWidth;
+  const h0 = src.videoHeight || src.naturalHeight;
+  const s = Math.max(c.width / w0, c.height / h0) * 1.08;
+  g.drawImage(src, (c.width - w0 * s) / 2, (c.height - h0 * s) / 2, w0 * s, h0 * s);
   return c.toDataURL('image/jpeg', 0.85);
 }
 
-async function showWall(i) {
+const paintBlur = (video) => { $('wall-blur').style.backgroundImage = `url("${blurred(video)}")`; };
+
+async function showWall(i, play) {
   if (!walls.length) return;
   const at = (i + walls.length) % walls.length;
-  const w = walls[at];
-  let img;
-  try { img = await loadImage(w.url); } catch { return; } // decoded first, so the fade never shows a blank
-  wallAt = at;
   const next = $(wallFlip ? 'wall-a' : 'wall-b');
   const prev = $(wallFlip ? 'wall-b' : 'wall-a');
+  try { await loadClip(next, walls[at].url, !play); } catch { return; } // a frame first, so the fade never shows a blank
+  wallAt = at;
   wallFlip = !wallFlip;
-  next.style.backgroundImage = `url("${w.url}")`;
+  next.defaultPlaybackRate = WALL_SPEED;
+  next.playbackRate = WALL_SPEED;
+  if (play) next.play().catch(() => {});
   next.classList.add('on');
   prev.classList.remove('on');
-  $('wall-blur').style.backgroundImage = `url("${blurred(img)}")`;
-  const author = w.artist ? `Photo: ${w.artist}` : `Photo: author named on Commons, “${w.source}”`;
-  $('lock-credit').textContent = [w.title, author, w.license, 'Wikimedia Commons'].filter(Boolean).join(' · ');
+  setTimeout(() => { if (!prev.classList.contains('on')) prev.pause(); }, 2600); // after the crossfade
+  if (!play) paintBlur(next);
+  const w = walls[at];
+  $('lock-credit').textContent = [w.title, `Video: ${w.artist || 'Wikimedia Commons'}`, w.license, 'Wikimedia Commons'].filter(Boolean).join(' · ');
+}
+
+// Changes the clip's speed smoothly over about a second and a half.
+// Chromium plays no slower than 1/16; below that the clip is paused.
+function ramp(video, to, then = () => {}) {
+  cancelAnimationFrame(rateRamp);
+  const from = video.playbackRate;
+  const t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / 1500);
+    const rate = from + (to - from) * k * k * (3 - 2 * k);
+    if (k >= 1 || (to === 0 && rate < 0.07)) { if (to > 0) video.playbackRate = to; then(); return; }
+    video.playbackRate = Math.max(0.0625, rate);
+    rateRamp = requestAnimationFrame(step);
+  };
+  rateRamp = requestAnimationFrame(step);
+}
+
+function keepClipsComing() {
+  const v = wallVideo();
+  v.onended = nextClip;
+  clearTimeout(clipTimer);
+  clipTimer = setTimeout(nextClip, CLIP_MAX_MS);
+}
+
+async function nextClip() {
+  if (!lock?.live) return;
+  wallVideo().onended = null;
+  await showWall(wallAt + 1, !look.still);
+  if (lock?.live) keepClipsComing();
+}
+
+// Screen saver on: the held frame comes alive, gathering speed.
+function playWall() {
+  if (look.still) { clearTimeout(clipTimer); clipTimer = setTimeout(nextClip, CLIP_MAX_MS); return; } // stills, changing
+  const v = wallVideo();
+  v.playbackRate = 0.0625;
+  v.play().catch(() => {});
+  ramp(v, WALL_SPEED);
+  keepClipsComing();
+}
+
+// A button: the clip slows to a stop where it is, and that frame stays.
+function stopWall() {
+  clearTimeout(clipTimer);
+  const v = wallVideo();
+  v.onended = null;
+  if (v.paused) return;
+  ramp(v, 0, () => { v.pause(); paintBlur(v); });
 }
 
 // Parallax: the picture moves a little against the focus, slower than the
@@ -688,30 +763,6 @@ function panWall() {
   const x = look.still ? 0 : (0.5 - along) * 7;
   const y = look.still ? 0 : meFocused ? 1.5 : -1.5 * pos.row;
   $('wall-pan').style.transform = `scale(1.1) translate3d(${x.toFixed(2)}%, ${y.toFixed(2)}%, 0)`;
-}
-
-function startDrift() {
-  if (look.still) return;
-  drift ||= $('wall-move').animate([
-    { transform: 'scale(1.06) translate3d(-1.8%, -1.2%, 0)' },
-    { transform: 'scale(1.2) translate3d(1.8%, 1.4%, 0)' },
-  ], { duration: 50000, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' });
-  drift.updatePlaybackRate(1);
-  drift.play();
-}
-
-// Waking: the drift slows to a stop over about a second, and stays there.
-function stopDrift() {
-  if (!drift || drift.playState !== 'running') return;
-  let rate = 1;
-  const slow = () => {
-    if (lock) return; // the screen saver came back meanwhile
-    rate *= 0.94;
-    if (rate < 0.03) { drift.pause(); return; }
-    drift.updatePlaybackRate(rate);
-    requestAnimationFrame(slow);
-  };
-  requestAnimationFrame(slow);
 }
 
 // ------------------------------------------------------------------ weather
@@ -773,7 +824,7 @@ const KEEP_SECONDS = 15;
 const NOTES = {
   display: () => 'If the edges of the picture are cut off, turn on your TV’s “Just Scan”, “Screen Fit” or “Full Pixel” picture size.',
   saver: () => 'The screen saver comes on over the home screen only: a film keeps the TV awake. '
-    + 'Photos are Wikimedia Commons’ pictures of the day; the weather comes from Open-Meteo. '
+    + 'The live wallpapers are open-licensed videos from Wikimedia Commons; the weather comes from Open-Meteo. '
     + 'Turning off the screen and sleep apply while the PC is plugged in.',
   access: () => 'Text size and high contrast change WinTV’s own screens, over every app too. '
     + 'Reduce motion also asks apps and websites to keep still.',
@@ -1054,7 +1105,7 @@ function saverRows(power) {
   return rows;
 }
 
-const SAVER_STYLES = { photo: 'Photos of the day', colour: 'Clock on colour', dark: 'Clock on black' };
+const SAVER_STYLES = { live: 'Live wallpapers', colour: 'Clock on colour', dark: 'Clock on black' };
 
 // The weather's town: typed with the TV's keyboard (or a real one) and
 // looked up with Open-Meteo's town search.
@@ -1210,13 +1261,13 @@ function touched() { lastInput = Date.now(); }
 function showLock(askWho = false) {
   if (lock) { lock.askWho ||= askWho; return; }
   closeSheet();
-  // "Photos": the home screen's own picture comes alive (D-32).
-  const photo = prefs.screenSaverStyle === 'photo' && walls.length > 0;
-  lock = { since: Date.now(), askWho, timer: 0, tick: 0, spot: 0, hue: 0, flip: false, photo };
+  // "Live wallpapers": the home screen's own wallpaper comes alive (D-35).
+  const live = prefs.screenSaverStyle === 'live' && walls.length > 0;
+  lock = { since: Date.now(), askWho, timer: 0, tick: 0, spot: 0, hue: 0, flip: false, live };
   const el = $('lock');
   el.dataset.spot = '0';
-  el.classList.toggle('photo', photo);
-  if (photo) { document.body.classList.add('saver'); startDrift(); }
+  el.classList.toggle('live', live);
+  if (live) { document.body.classList.add('saver'); playWall(); }
   paintLock();
   el.classList.remove('hidden');
   const hint = $('lock-hint');
@@ -1230,10 +1281,8 @@ function paintLock() {
   const now = new Date();
   $('lock-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   $('lock-date').textContent = now.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
-  // Photos: the next picture every third minute. Colour: the home screen's
-  // apps, one after another, crossfading.
-  const palette = lock.photo ? [] : rows.flat().filter((a) => a.colors?.length);
-  if (lock.photo && lock.tick % 3 === 2) showWall(wallAt + 1);
+  // Colour: the home screen's apps, one after another, crossfading.
+  const palette = lock.live ? [] : rows.flat().filter((a) => a.colors?.length);
   if (palette.length) {
     const it = palette[lock.hue++ % palette.length];
     const next = $(lock.flip ? 'lock-a' : 'lock-b');
@@ -1268,7 +1317,7 @@ function wake() {
   $('lock').classList.add('hidden');
   if (document.body.classList.contains('saver')) {
     document.body.classList.remove('saver'); // the blur and the tiles come back
-    stopDrift();
+    stopWall();
   }
   $('lock-clock').classList.remove('moving');
   if (askWho && profiles.length > 1) openPicker();

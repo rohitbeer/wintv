@@ -16,6 +16,7 @@ const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonito
 // also logs, replaces this one further down.
 process.on('uncaughtException', (e) => { try { process.stderr.write(String(e && e.stack || e)); } catch { /* nothing to write to */ } app.exit(1); });
 const { spawn, execFile } = require('node:child_process');
+const { Readable } = require('node:stream');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -93,6 +94,9 @@ function loadConfig() {
     lockScreen: { afterMinutes: 5, askWhoAfterMinutes: 30, ...(cfg.lockScreen || {}) },
     keyboard: { autoOpen: true, layout: 'auto', ...(cfg.keyboard || {}) },
     weather: isPlace(cfg.weather) ? cfg.weather : null,
+    wallpapers: (Array.isArray(cfg.wallpapers) ? cfg.wallpapers : [])
+      .filter((v) => typeof v?.file === 'string' && typeof v?.title === 'string')
+      .map(({ file, title }) => ({ file, title: title.slice(0, 80) })),
     apps: items(cfg.apps, 0),
     system: items(cfg.system, 1),
   };
@@ -125,8 +129,8 @@ function logoUrl(name) {
 
 function artState() {
   return {
-    wallpapers: art.wallpapers().slice(0, 12).map(({ file, title, artist, source, license }) =>
-      ({ url: `wintv://ui/cache/wallpapers/${file}`, title, artist, source, license })),
+    videos: art.videos(config.wallpapers).map(({ file, title, artist, license }) =>
+      ({ url: `wintv://ui/cache/videos/${file}`, title, artist, license })),
   };
 }
 
@@ -149,12 +153,18 @@ function publicState() {
   };
 }
 
-// Wallpapers and logos: at start, then four times a day. New ones redraw
-// the home screen (its tiles and pictures arrive with the state).
+// Logos, then the live wallpapers: at start, then four times a day. Each new
+// one reaches the home screen with the state.
+let artBusy = false;
 async function refreshArt() {
+  if (artBusy) return; // a first download of the videos can take a while
+  artBusy = true;
   const redraw = () => { if (win && !win.isDestroyed()) win.webContents.send('state', publicState()); };
   try { if (await art.refreshLogos([...config.apps, ...config.system].map((a) => a.logo).filter(Boolean))) redraw(); } catch (e) { log('art:', e.message); }
-  try { if (await art.refreshWallpapers(redraw)) redraw(); } catch (e) { log('art:', e.message); }
+  try { await art.refreshVideos(config.wallpapers, redraw); } catch (e) { log('art:', e.message); }
+  artBusy = false;
+  // Interrupted (offline, or Wikimedia asked to slow down): try again soon.
+  if (art.videosMissing(config.wallpapers)) setTimeout(refreshArt, 15 * 60000);
 }
 
 const fahrenheit = () => ['US', 'LR', 'MM'].includes(app.getLocaleCountryCode?.() || '');
@@ -346,7 +356,7 @@ async function system(op, args) {
 // are accepted; the site file's lockScreen gives the screen saver defaults.
 const PREFS = {
   screenSaverMinutes: [2, 5, 10, 15, 30, 0], // idle minutes on the home screen; 0 = never
-  screenSaverStyle: ['photo', 'colour', 'dark'],
+  screenSaverStyle: ['live', 'colour', 'dark'],
   askWhoMinutes: [15, 30, 60, 120, 0],       // waking after this long away asks who is watching; 0 = never
   navSounds: ['off', 'soft', 'normal', 'loud'],
   textSize: ['default', 'large', 'larger'],
@@ -393,9 +403,10 @@ function prefsFile() {
 
 function loadPrefs() {
   const saved = readJson(prefsFile()) || {};
+  if (saved.screenSaverStyle === 'photo') saved.screenSaverStyle = 'live'; // pictures of the day became live wallpapers (D-35)
   prefs = {
     screenSaverMinutes: config.lockScreen.afterMinutes,
-    screenSaverStyle: 'photo',
+    screenSaverStyle: 'live',
     askWhoMinutes: config.lockScreen.askWhoAfterMinutes,
     navSounds: 'normal',
     textSize: 'default',
@@ -922,17 +933,38 @@ const UI_TYPES = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.webm': 'video/webm',
 };
-protocol.registerSchemesAsPrivileged([{ scheme: 'wintv', privileges: { standard: true, secure: true } }]);
+// stream: video elements may play from wintv:// (the live wallpapers).
+protocol.registerSchemesAsPrivileged([{ scheme: 'wintv', privileges: { standard: true, secure: true, stream: true } }]);
+
+// A downloaded file, in the pieces a video player asks for (HTTP Range).
+function serveCached(req, file) {
+  let size;
+  try { size = fs.statSync(file).size; } catch { return new Response('', { status: 404 }); }
+  const type = UI_TYPES[path.extname(file)] || 'application/octet-stream';
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
+  if (!range || (!range[1] && !range[2])) {
+    return new Response(Readable.toWeb(fs.createReadStream(file)), { headers: { 'content-type': type, 'content-length': String(size), 'accept-ranges': 'bytes' } });
+  }
+  const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+  const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+  if (start > end || start >= size) return new Response('', { status: 416, headers: { 'content-range': `bytes */${size}` } });
+  return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })), {
+    status: 206,
+    headers: { 'content-type': type, 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes' },
+  });
+}
 
 function serveUi() {
   protocol.handle('wintv', (req) => {
     const url = new URL(req.url);
     if (url.host !== 'ui') return new Response('', { status: 404 });
-    // Pictures art.js downloaded: only names it writes itself.
-    const cached = /^\/cache\/(wallpapers|logos)\/([0-9a-f-]{1,40}\.(?:jpg|png))$/.exec(url.pathname);
-    const file = cached ? path.join(CACHE_DIR, cached[1], cached[2]) : path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
-    if (!cached && !file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
+    // Files art.js downloaded: only names it writes itself.
+    const cached = /^\/cache\/(videos|logos)\/([0-9a-f]{16}\.(?:webm|png))$/.exec(url.pathname);
+    if (cached) return serveCached(req, path.join(CACHE_DIR, cached[1], cached[2]));
+    const file = path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
+    if (!file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
     try {
       return new Response(fs.readFileSync(file), { headers: { 'content-type': UI_TYPES[path.extname(file)] || 'application/octet-stream' } });
     } catch {

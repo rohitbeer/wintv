@@ -1,6 +1,6 @@
 'use strict';
-// WinTV's pictures and weather, fetched by the TV itself (D-32): the
-// wallpaper (Wikimedia Commons' picture of the day, in 4K), the services'
+// WinTV's pictures and weather, fetched by the TV itself (D-32, D-35): the
+// live wallpapers (open-licensed videos on Wikimedia Commons), the services'
 // logos (vector files on Wikimedia Commons, by file name) and the weather
 // (Open-Meteo). None of it is in the repo, none of it needs an account or a
 // key, and WinTV works without it. Everything is kept in a cache on the TV,
@@ -9,12 +9,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { net } = require('electron');
 
 // Wikimedia asks every program to say who it is.
 const USER_AGENT = 'WinTV (https://github.com/rohitbeer/wintv)';
-const KEEP_PICTURES = 30;
-const LOOK_BACK_DAYS = 21;
 
 let dir = null;
 let log = () => {};
@@ -22,11 +22,13 @@ let log = () => {};
 function init(cacheDir, logger) {
   dir = cacheDir;
   log = logger;
-  for (const sub of ['wallpapers', 'logos']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  for (const sub of ['videos', 'logos']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  // Pictures of the day, from before the live wallpapers (D-35).
+  fs.rmSync(path.join(dir, 'wallpapers'), { recursive: true, force: true });
 }
 
-async function get(url, timeoutMs = 20000) {
-  const res = await net.fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
+async function get(url, timeoutMs = 20000, headers = {}) {
+  const res = await net.fetch(url, { headers: { 'User-Agent': USER_AGENT, ...headers }, signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`${res.status} from ${new URL(url).host}`);
   return res;
 }
@@ -42,6 +44,13 @@ async function save(url, file) {
   writeAtomic(file, Buffer.from(await res.arrayBuffer()));
 }
 
+// Large files go straight to disk instead of through memory.
+async function saveStream(url, file) {
+  const res = await get(url, 30 * 60000);
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(file + '.tmp'));
+  fs.renameSync(file + '.tmp', file);
+}
+
 function readIndex(sub) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, sub, 'index.json'), 'utf8')); } catch { return {}; }
 }
@@ -54,61 +63,95 @@ const plain = (s) => String(s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' '
 // The author field is usually a name, but some authors put a note there.
 const nameOnly = (s) => (s && s.length <= 48 && !/[:.!?]\s/.test(s) ? s : '');
 
-// ---------------------------------------------------------------- wallpapers
-// Wikimedia Commons' picture of the day: a photo the Commons community chose,
-// under a free licence that names its author. Only landscape pictures at
-// least 1920 pixels wide are kept, newest first.
-function wallpapers() {
-  const pictures = readIndex('wallpapers').pictures || {};
-  return Object.keys(pictures).sort().reverse()
-    .filter((day) => fs.existsSync(path.join(dir, 'wallpapers', pictures[day].file)))
-    .map((day) => ({ day, ...pictures[day], artist: nameOnly(pictures[day].artist) }));
+// Commons' author field is HTML; videos sometimes credit "Video: … <br> Audio: …".
+function author(html) {
+  const lines = String(html || '').replace(/<br\s*\/?>/gi, '\n').split('\n').map(plain).filter(Boolean);
+  const video = lines.find((l) => /^video\s*:/i.test(l));
+  return nameOnly((video || lines[0] || '').replace(/^video\s*:\s*/i, ''));
 }
 
-// onFirst runs once the first new picture is saved, so a new TV shows it
-// without waiting for the rest.
-async function refreshWallpapers(onFirst = () => {}) {
-  const index = readIndex('wallpapers');
-  index.pictures ||= {};
-  index.skipped ||= {};
+// ---------------------------------------------------------------- live wallpapers
+// The screen saver's videos (D-35): a fixed collection of open-licensed
+// clips on Wikimedia Commons, named in apps.json's "wallpapers". The TV
+// downloads each clip's 1080p WebM once, one at a time, and reads its author
+// and licence from Commons for the credit.
+const VIDEO_NAME = /^[^|#<>[\]{}\u0000-\u001f]{1,240}\.(webm|ogv)$/i;
+const TRANSCODES = ['1080p.vp9.webm', '1080p.webm', '720p.vp9.webm', '720p.webm'];
+
+// Only smooth footage: 60 frames a second (59.94, the TV standard, counts).
+// Commons' own frame-rate field is sometimes wrong, so the TV reads the
+// frame duration from the start of the WebM file itself (Matroska's
+// DefaultDuration, in nanoseconds) before downloading the rest.
+const MIN_FPS = 59;
+
+async function frameRate(url) {
+  const head = Buffer.from(await (await get(url, 60000, { Range: 'bytes=0-262143' })).arrayBuffer());
+  const at = head.indexOf(Buffer.from([0x23, 0xe3, 0x83]));
+  if (at < 0) return null;
+  const sizeByte = head[at + 3];
+  const width = 9 - sizeByte.toString(2).length; // EBML: leading zeros + 1 bytes of size
+  const size = sizeByte & (0xff >> width);
+  const ns = head.subarray(at + 3 + width, at + 3 + width + size).reduce((n, b) => n * 256 + b, 0);
+  return ns ? 1e9 / ns : null;
+}
+const videoFile = (name) => `${crypto.createHash('sha1').update(name).digest('hex').slice(0, 16)}.webm`;
+
+const haveVideo = (index, name) => !!index[name]?.file && fs.existsSync(path.join(dir, 'videos', index[name].file));
+
+// The ones on disk, in the collection's order.
+function videos(list) {
+  const index = readIndex('videos');
+  return list.filter((v) => haveVideo(index, v.file)).map((v) => ({ ...index[v.file], title: v.title }));
+}
+
+async function refreshVideos(list, onNew = () => {}) {
+  const index = readIndex('videos');
+  // Clips no longer in the collection: their space back first.
+  for (const name of Object.keys(index)) {
+    if (list.some((v) => v.file === name)) continue;
+    if (index[name].file) fs.rmSync(path.join(dir, 'videos', index[name].file), { force: true });
+    delete index[name];
+  }
+  writeIndex('videos', index);
+  const missing = list.filter((v) => VIDEO_NAME.test(v.file) && !haveVideo(index, v.file) && !index[v.file]?.refused);
   let added = 0;
-  for (let back = 0; back < LOOK_BACK_DAYS; back++) {
-    const day = new Date(Date.now() - back * 86400000).toISOString().slice(0, 10);
-    if (index.pictures[day] || index.skipped[day]) continue;
-    try {
-      const feed = await (await get(`https://api.wikimedia.org/feed/v1/wikipedia/en/featured/${day.replaceAll('-', '/')}`)).json();
-      const pic = feed.image;
-      const width = pic?.image?.width || 0;
-      const height = pic?.image?.height || 1;
-      const thumb = String(pic?.thumbnail?.source || '').replace(/\?.*$/, '');
-      if (width < 1920 || width < height * 1.3 || !thumb.includes('/960px-')) { index.skipped[day] = true; continue; }
-      // Commons renders standard widths only; 3840 is 4K.
-      const url = thumb.replace('/960px-', width >= 3840 ? '/3840px-' : '/1920px-');
-      const file = `${day}${/\.png$/i.test(url) ? '.png' : '.jpg'}`;
-      await save(url, path.join(dir, 'wallpapers', file));
-      index.pictures[day] = {
-        file,
-        title: plain(pic.description?.text).slice(0, 160),
-        artist: nameOnly(plain(pic.artist?.text)),
-        source: plain(pic.title).replace(/^File:/, '').slice(0, 120),
-        license: plain(pic.license?.type).slice(0, 40),
-      };
-      added += 1;
-      if (added === 1) { writeIndex('wallpapers', index); onFirst(); }
-    } catch (e) {
-      log('art: picture of', day, e.message);
-      break; // offline: the next refresh tries again
+  for (let i = 0; i < missing.length; i += 25) {
+    const batch = missing.slice(i, i + 25);
+    const q = new URLSearchParams({ action: 'query', format: 'json', prop: 'videoinfo', viprop: 'derivatives|extmetadata',
+      viextmetadatafilter: 'Artist|LicenseShortName', titles: batch.map((v) => `File:${v.file}`).join('|') });
+    const r = await (await get(`https://commons.wikimedia.org/w/api.php?${q}`)).json();
+    const spelled = new Map((r.query?.normalized || []).map((n) => [n.from, n.to]));
+    const pages = new Map(Object.values(r.query?.pages || {}).map((p) => [p.title, p.videoinfo?.[0]]));
+    for (const v of batch) {
+      const info = pages.get(spelled.get(`File:${v.file}`) || `File:${v.file}`);
+      const byKey = new Map((info?.derivatives || []).map((d) => [d.transcodekey, d.src]));
+      const url = TRANSCODES.map((k) => byKey.get(k)).find(Boolean);
+      if (!url) { log('art: no playable copy on Commons:', v.file); continue; }
+      try {
+        const fps = await frameRate(url);
+        if (!(fps >= MIN_FPS)) {
+          log('art: not a wallpaper,', fps ? `${fps.toFixed(2)} fps:` : 'frame rate unknown:', v.file);
+          index[v.file] = { refused: fps ? `${fps.toFixed(2)} fps` : 'frame rate unknown' };
+          writeIndex('videos', index);
+          continue;
+        }
+        await saveStream(url, path.join(dir, 'videos', videoFile(v.file)));
+        index[v.file] = {
+          file: videoFile(v.file),
+          artist: author(info.extmetadata?.Artist?.value),
+          license: plain(info.extmetadata?.LicenseShortName?.value).slice(0, 40),
+        };
+        writeIndex('videos', index);
+        added += 1;
+        onNew();
+        await new Promise((r) => setTimeout(r, 5000)); // Wikimedia limits how fast one client may download
+      } catch (e) {
+        log('art: video', v.file, e.message);
+        return added; // offline or interrupted: the next refresh carries on
+      }
     }
   }
-  const days = Object.keys(index.pictures).sort().reverse();
-  for (const old of days.slice(KEEP_PICTURES)) {
-    fs.rmSync(path.join(dir, 'wallpapers', index.pictures[old].file), { force: true });
-    delete index.pictures[old];
-  }
-  const cutoff = new Date(Date.now() - 2 * LOOK_BACK_DAYS * 86400000).toISOString().slice(0, 10);
-  for (const day of Object.keys(index.skipped)) if (day < cutoff) delete index.skipped[day];
-  writeIndex('wallpapers', index);
-  if (added) log('art: new pictures:', String(added));
+  if (added) log('art: new videos:', String(added));
   return added;
 }
 
@@ -187,4 +230,10 @@ async function findPlaces(name) {
   }));
 }
 
-module.exports = { init, wallpapers, refreshWallpapers, logo, refreshLogos, weather, findPlaces };
+// Clips in the collection not yet on the TV (refused ones don't count).
+function videosMissing(list) {
+  const index = readIndex('videos');
+  return list.filter((v) => !haveVideo(index, v.file) && !index[v.file]?.refused).length;
+}
+
+module.exports = { init, videos, videosMissing, refreshVideos, logo, refreshLogos, weather, findPlaces };
