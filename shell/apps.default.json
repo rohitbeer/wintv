@@ -1,5 +1,5 @@
 {
-  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; power = power menu. drm: true turns on Widevine in that tile's Brave profile. logo: a file name on Wikimedia Commons, downloaded by the TV (logoStyle wordmark = the logo replaces the name; logoWhite = drawn white). lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz. wallpapers: the live wallpapers, open-licensed videos on Wikimedia Commons by file name, with a short title (the TV downloads them, only 60 fps or more; author and licence come from Commons).",
+  "_comment": "Shipped defaults. A household adds C:\\ProgramData\\WinTV\\apps.json: any top-level key there replaces the one here, and addApps (with \"after\": id) / removeApps edit the app list. kind: web = browser app window with its own profile; browser = full browser; exe = program; uri = protocol link; settings = WinTV Settings; allapps = All apps; power = power menu. drm: true turns on Widevine in that tile's Brave profile. logo: a file name on Wikimedia Commons, downloaded by the TV (logoStyle wordmark = the logo replaces the name; logoWhite = drawn white). lockScreen: minutes idle on the home screen before the clock screen (0 = never), and minutes after which waking asks who is watching. homeKeys / quickKeys: keyboard shortcuts for Home and quick settings (the remote's Home key, held or tapped, works through input.ps1). keyboard: autoOpen = the on-screen keyboard comes up when a text field gets the focus in any app; layout = auto | qwerty | qwertz. wallpapers: the live wallpapers, open-licensed videos on Wikimedia Commons by file name, with a short title (the TV downloads them, only 60 fps or more; author and licence come from Commons).",
   "browserCandidates": [
     "%ProgramFiles%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "%ProgramFiles(x86)%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -141,6 +141,18 @@
     }
   ],
   "system": [
+    {
+      "id": "allapps",
+      "name": "All apps",
+      "kind": "allapps",
+      "glyph": "apps",
+      "eyebrow": "System",
+      "tagline": "Every program on this PC, Terminal and PowerShell included. Hold OK on one to pin it to Home.",
+      "colors": [
+        "#3a3a44",
+        "#15151a"
+      ]
+    },
     {
       "id": "settings",
       "name": "Settings",

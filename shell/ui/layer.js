@@ -19,6 +19,9 @@ const GLYPHS = {
   hide: '<rect x="3.5" y="4" width="17" height="10" rx="2"/><path d="M8 17.5l4 3 4-3"/>',
   left: '<path d="M14.5 6.5L9 12l5.5 5.5"/>',
   right: '<path d="M9.5 6.5L15 12l-5.5 5.5"/>',
+  apps: '<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/>',
+  fullscreen: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
 };
 const glyph = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${GLYPHS[name]}</svg>`;
 const $ = (id) => document.getElementById(id);
@@ -70,6 +73,7 @@ api.onShow(({ surface, data }) => show(surface, data));
 api.onHide((name) => hide(name, false));
 api.onKey(({ k, repeat }) => key(k, repeat));
 api.onPrefs(applyLook); // text size, contrast, motion and sounds, as chosen in Settings
+document.querySelector('.q-close').addEventListener('click', () => hide('quick'));
 
 // Only when this window has the focus: a plain browser, or a Linux test run.
 const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Enter: 'ok', Escape: 'back', Backspace: 'back', BrowserBack: 'back' };
@@ -112,6 +116,13 @@ function showQuick(d) {
   }
   rows.push({ id: 'sleep', kind: 'stepper', glyph: 'moon', label: 'Sleep timer', steps: d.sleepSteps || [0, 15, 30, 60, 90, 120],
     value: d.sleep?.minutes || 0, setTo: d.sleep?.minutes || 0, at: d.sleep?.at || 0 });
+  // Switching contexts (D-36): the other open apps, and for the browser
+  // apps in front their full screen and (Brave) the address bar.
+  if (d.others?.length) rows.push({ id: 'switch', kind: 'apps', glyph: 'apps', label: 'Switch to', options: d.others, at: 0 });
+  if (d.app?.kind === 'browser') rows.push({ id: 'address', kind: 'action', glyph: 'search', label: 'Address bar', note: 'Search, tabs and Brave’s settings' });
+  if (d.app?.kind === 'web' || d.app?.kind === 'browser') {
+    rows.push({ id: 'fullscreen', kind: 'action', glyph: 'fullscreen', label: d.app.full ? 'Leave full screen' : 'Full screen' });
+  }
   if (d.appInFront) rows.push({ id: 'keyboard', kind: 'action', glyph: 'keyboard', label: 'Keyboard' });
   rows.push({ id: 'screen-off', kind: 'action', glyph: 'screenoff', label: 'Picture off', note: 'Sound keeps playing. Any button turns it back on.' });
   if (d.profiles) rows.push({ id: 'who', kind: 'action', glyph: 'people', label: 'Who’s watching?' });
@@ -140,12 +151,14 @@ function paintQuick() {
       el.querySelector('.q-fill').style.width = `${r.value}%`;
     } else if (r.kind === 'toggle') val.textContent = r.on ? 'On' : 'Off';
     else if (r.kind === 'stepper') val.textContent = sleepText(r);
+    else if (r.kind === 'apps') val.textContent = r.options[r.at].name;
     else val.textContent = r.value || '';
     el.classList.toggle('focused', i === quick.index);
     el.addEventListener('mousemove', () => { if (quick.index !== i) { quick.index = i; paintQuick(); } });
     el.addEventListener('click', () => { quick.index = i; quickKey('ok', false); });
     box.append(el);
   });
+  box.children[quick.index]?.scrollIntoView({ block: 'nearest' }); // long lists scroll
 }
 
 function quickKey(k, repeat) {
@@ -173,6 +186,9 @@ function quickKey(k, repeat) {
     } else if (r.kind === 'toggle') {
       if (repeat) return;
       setMute(!r.on);
+    } else if (r.kind === 'apps') {
+      if (repeat || r.options.length < 2) return;
+      r.at = (r.at + dir + r.options.length) % r.options.length;
     } else return;
     tick();
   } else if (k === 'ok') {
@@ -185,8 +201,12 @@ function quickKey(k, repeat) {
       clearTimeout(sleepSend);
       sleepSend = setTimeout(() => setSleep(r.value), 700);
     } else if (r.kind === 'action') {
-      if (r.id === 'home' || r.id === 'who' || r.id === 'screen-off' || r.id === 'keyboard') hide('quick');
+      if (['home', 'who', 'screen-off', 'keyboard', 'address', 'fullscreen'].includes(r.id)) hide('quick');
       api.action(r.id);
+      return;
+    } else if (r.kind === 'apps') {
+      hide('quick');
+      api.action('switch', r.options[r.at].id);
       return;
     }
   }
@@ -468,7 +488,8 @@ if (preview) {
   applyLook({ textSize: q.get('text') || 'default', reduceMotion: q.has('still'), highContrast: q.has('contrast'), navSounds: 'normal' });
   const audioState = { present: true, device: 'LG TV', volume: 36, muted: false };
   for (const name of (q.get('show') || 'quick').split(',')) {
-    if (name === 'quick') show('quick', { audio: audioState, sleep: { minutes: 30, at: Date.now() + 27 * 60000 }, appInFront: true, profiles: true });
+    if (name === 'quick') show('quick', { audio: audioState, sleep: { minutes: 30, at: Date.now() + 27 * 60000 }, appInFront: true, profiles: true,
+      app: { id: 'browser', name: 'Browser', kind: 'browser', full: true }, others: [{ id: 'youtube', name: 'YouTube' }, { id: 'netflix', name: 'Netflix' }] });
     if (name === 'keyboard') show('keyboard', { layout: q.get('layout') || 'qwerty', password: q.has('password') });
     if (name === 'volume') show('volume', audioState);
     if (name === 'notice') show('notice', { kind: 'sleep', at: Date.now() + 58000 });

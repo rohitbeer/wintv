@@ -9,11 +9,12 @@
 #   {"ev":"text","on":true,"password":false,"pid":123}   a text field got (or lost) the focus, in any app
 #   {"ev":"hwtype"}                                       someone typed on a real keyboard (which key is never sent)
 #   {"ev":"grab-expired"}                                 nobody used the system layer for 2 minutes
+#   {"ev":"device","kind":"remote"}                      a remote or a keyboard was first used (once each)
 #   {"ev":"ready","hook":true,"uia":true}
 # In (one JSON object per line):
 #   {"op":"grab","on":true}        arrows/OK/Back go to the system layer instead of the app
 #   {"op":"type","text":"abc"}     type into whatever has the focus
-#   {"op":"key","key":"backspace"} backspace | enter | left | right | tab
+#   {"op":"key","key":"backspace"} backspace | enter | left | right | tab | f11 | address (Ctrl+L)
 #   {"op":"screen-off"}            picture off; any button brings it back
 #
 # Privacy: the hook sees every key pressed in this session, as any keyboard
@@ -60,7 +61,7 @@ namespace WinTV {
         const int VK_BACK = 0x08, VK_TAB = 0x09, VK_RETURN = 0x0D, VK_ESCAPE = 0x1B,
                   VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28,
                   VK_LWIN = 0x5B, VK_RWIN = 0x5C, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_H = 0x48,
-                  VK_BROWSER_BACK = 0xA6, VK_BROWSER_HOME = 0xAC,
+                  VK_BROWSER_BACK = 0xA6, VK_BROWSER_HOME = 0xAC, VK_F11 = 0x7A, VK_L = 0x4C,
                   VK_VOLUME_MUTE = 0xAD, VK_VOLUME_DOWN = 0xAE, VK_VOLUME_UP = 0xAF;
 
         // ------------------------------------------------------------ output
@@ -77,6 +78,17 @@ namespace WinTV {
         static readonly bool[] held = new bool[256];
         static int homeVk;              // which key started the current Home press (0 = none)
         static bool winAlone;           // the Windows key is down and nothing else was pressed with it
+        static bool sawRemote, sawKeyboard;
+
+        // Which kind of device is in use, said once each (WinTV shows how to
+        // use it): a remote has Home, Back, volume or media keys; a keyboard
+        // has letters and the Windows key. Arrows alone could be either.
+        static void Seen(uint vk) {
+            bool remote = vk == VK_BROWSER_HOME || vk == VK_BROWSER_BACK || (vk >= 0xAD && vk <= 0xB3);
+            bool keyboard = vk == VK_LWIN || vk == VK_RWIN || (vk >= 0x41 && vk <= 0x5A);
+            if (remote && !sawRemote) { sawRemote = true; Line("{\"ev\":\"device\",\"kind\":\"remote\"}"); }
+            if (keyboard && !sawKeyboard) { sawKeyboard = true; Line("{\"ev\":\"device\",\"kind\":\"keyboard\"}"); }
+        }
         static long winAt;
         static long lastTyping;
         static Timer grabTimer;
@@ -139,6 +151,7 @@ namespace WinTV {
                 if (!down && msg != WM_KEYUP && msg != WM_SYSKEYUP) return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
                 bool repeat = down && held[k.vk];
                 held[k.vk] = down;
+                if (down && !repeat) Seen(k.vk);
 
                 // The Windows key on its own is Home on a keyboard (the TV has no
                 // Start menu): tap = home screen, hold = quick settings, told apart
@@ -224,6 +237,10 @@ namespace WinTV {
                 case "tab": vk = VK_TAB; break;
                 case "left": vk = VK_LEFT; ext = KEYEVENTF_EXTENDEDKEY; break;
                 case "right": vk = VK_RIGHT; ext = KEYEVENTF_EXTENDEDKEY; break;
+                case "f11": vk = VK_F11; break; // the app's full screen, on or off
+                case "address": // Ctrl+L: the browser's address bar
+                    Send(new[] { KeyInput(VK_CONTROL, 0, 0), KeyInput(VK_L, 0, 0), KeyInput(VK_L, 0, KEYEVENTF_KEYUP), KeyInput(VK_CONTROL, 0, KEYEVENTF_KEYUP) });
+                    return;
                 default: throw new ArgumentException("unknown key " + name);
             }
             Send(new[] { KeyInput((ushort)vk, 0, ext), KeyInput((ushort)vk, 0, ext | KEYEVENTF_KEYUP) });

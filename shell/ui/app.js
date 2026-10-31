@@ -17,6 +17,7 @@ const GLYPHS = {
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>',
   update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
   moon: '<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" stroke-linejoin="round"/>',
+  apps: '<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
   access: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="7.4" r=".9" fill="currentColor"/><path d="M7.6 9.8l4.4.9 4.4-.9M12 10.7v3.4M12 14.1l-2.2 3.6M12 14.1l2.2 3.6"/>',
   // weather
   sun: '<circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"/>',
@@ -52,6 +53,13 @@ const api = window.wintv || {
   weather: async () => ({ ok: true, result: { place: 'Dublin', temp: 9, code: 2, day: true, high: 12, low: 6, unit: '°C' } }),
   places: async (name) => ({ ok: true, result: [{ name, region: 'Leinster, Ireland', latitude: 53.35, longitude: -6.26 }] }),
   keyboard: async () => ({ ok: true }),
+  apps: async () => ({ ok: true, result: [
+    { id: 'a', name: 'Notepad', icon: null }, { id: 'b', name: 'Terminal', icon: null }, { id: 'c', name: 'Windows PowerShell', icon: null },
+    { id: 'd', name: 'VLC media player', icon: null }, { id: 'e', name: 'Steam', icon: null }, { id: 'f', name: 'Task Manager', tool: true, icon: null },
+    { id: 'g', name: 'Registry Editor', tool: true, icon: null }, { id: 'h', name: 'Microsoft Store', desktopOnly: true, icon: null }] }),
+  device: async () => ({ ok: true }),
+  pointer: async () => ({ ok: true }),
+  onDevice: () => {},
   setProfile: async () => ({ ok: true }),
   setPref: async (key, value) => ({ ok: true, result: { ...prefs, [key]: value } }),
   system: async (op) => ({ ok: true, result: MOCK_SYSTEM[op] }),
@@ -131,6 +139,7 @@ function tileFor(item) {
     img.className = `logo ${item.logoStyle}${item.logoWhite ? ' white' : ''}`;
     img.alt = '';
     img.src = item.logo;
+    img.onerror = () => img.replaceWith(document.createRange().createContextualFragment(glyph(item.glyph))); // icon not drawn yet
     b.querySelector('.face svg').replaceWith(img);
   }
   b.querySelector('.name').textContent = item.name;
@@ -222,6 +231,7 @@ function move(dx, dy) {
   if (picker) { if (dx) movePicker(dx); return; }
   if (sheet) { if (dy) moveSheet(dy); return; }
   if (settings) { moveSettings(dx, dy); return; }
+  if (allApps) { moveAllApps(dx, dy); return; }
   if (meFocused) { if (dy > 0) focusMe(false); return; }
   if (dy) {
     const r = pos.row + dy;
@@ -256,9 +266,11 @@ function toast(text) {
 }
 
 async function activate() {
+  if (guide) return closeGuide();
   if (picker) return choosePicker();
   if (sheet) return sheet.items[sheet.index].run();
   if (settings) return activateSetting();
+  if (allApps) return openFromAllApps();
   if (meFocused) { select(); return openProfileMenu(); }
   const item = current();
   const el = currentTile();
@@ -268,6 +280,7 @@ async function activate() {
   select();
   if (item.kind === 'power') return openPower();
   if (item.kind === 'settings') return openSettings();
+  if (item.kind === 'allapps') return openAllApps();
   const res = await api.launch(item.id);
   if (!res.ok) toast(res.error || `Could not open ${item.name}`);
 }
@@ -336,10 +349,12 @@ function openPower() {
 }
 
 function openContext() {
+  if (allApps) return allAppsMenu();
   if (picker || settings) return;
   const item = current();
   if (!item || item.kind === 'power' || item.kind === 'settings') return;
   const items = [{ label: `Open ${item.name}`, run: () => { closeSheet(); activate(); } }];
+  if (item.kind === 'start') items.push({ label: 'Unpin from Home', run: () => { closeSheet(); unpin(item.appid); } });
   if (running.has(item.id)) {
     items.push({ label: `Quit ${item.name}`, run: async () => { closeSheet(); await api.quit(item.id); } });
   }
@@ -348,8 +363,10 @@ function openContext() {
 }
 
 function back() {
+  if (guide) { closeGuide(); return; }
   if (picker) { if (active) closePicker(); return; }
   if (closeSheet()) return;
+  if (allApps) { closeAllApps(); return; }
   if (meFocused) { focusMe(false); return; }
   if (settings) { settingsBack(); return; }
   if (pos.row !== 0 || pos.col !== 0) setFocus(0, 0);
@@ -425,6 +442,208 @@ function paintMe() {
   me.append(avatar(p, 'avatar mini'));
 }
 
+// ------------------------------------------------------------------ All apps (D-37)
+// Every app Windows lists for the TV account: programs, Terminal, PowerShell,
+// Windows' tools. The older Store apps are shown but can't open on the TV:
+// they need Explorer's window host (D-19). Hold OK to pin one to Home.
+let allApps = null; // { list, tiles, index } while open
+
+async function openAllApps() {
+  allApps = { list: [], tiles: [], index: 0 };
+  $('allapps').classList.remove('hidden');
+  $('aa-groups').innerHTML = '<p class="aa-wait">Finding your apps…</p>';
+  const r = await api.apps();
+  if (!allApps) return;
+  if (!r.ok) { $('aa-groups').innerHTML = ''; toast(r.error || 'Couldn’t list the apps'); return; }
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  // WinTV's own apps first: the home screen's tiles (streaming, browser…).
+  const tvApps = (rows[0] || []).filter((a) => a.kind !== 'start').map((a) => ({ id: a.id, name: a.name, tile: a }));
+  const groups = [
+    ['TV apps', tvApps],
+    ['Apps', r.result.filter((a) => !a.tool && !a.desktopOnly).sort(byName)],
+    ['Windows tools', r.result.filter((a) => a.tool && !a.desktopOnly).sort(byName)],
+    ['Only on the Windows desktop', r.result.filter((a) => a.desktopOnly).sort(byName)],
+  ].filter(([, list]) => list.length);
+  const box = $('aa-groups');
+  box.innerHTML = '';
+  allApps.list = [];
+  for (const [title, list] of groups) {
+    const h = document.createElement('h3');
+    h.textContent = title;
+    const grid = document.createElement('div');
+    grid.className = 'aa-grid';
+    box.append(h, grid);
+    for (const a of list) {
+      const i = allApps.list.length;
+      const t = document.createElement('button');
+      t.className = `aa-tile${a.desktopOnly ? ' off' : ''}${a.tile ? ' tv' : ''}`;
+      t.tabIndex = -1;
+      if (a.tile) {
+        // A small copy of its home tile: brand colours and logo.
+        t.style.setProperty('--c1', a.tile.colors?.[0] || '#333');
+        t.style.setProperty('--c2', a.tile.colors?.[1] || '#111');
+        // A light tile (YouTube's white) gets a dark label.
+        const [r, g, b] = (a.tile.colors?.[0] || '#333').match(/\w\w/g).map((h) => parseInt(h, 16));
+        t.classList.toggle('light', 0.299 * r + 0.587 * g + 0.114 * b > 160);
+        t.innerHTML = a.tile.logo ? `<img alt="" class="${a.tile.logoStyle}${a.tile.logoWhite ? ' white' : ''}">` : glyph(a.tile.glyph);
+        if (a.tile.logo) t.querySelector('img').src = a.tile.logo;
+      } else {
+        t.innerHTML = a.icon ? '<img alt="">' : glyph('apps');
+        if (a.icon) t.querySelector('img').src = a.icon;
+      }
+      const n = document.createElement('span');
+      n.textContent = a.name;
+      t.append(n);
+      t.addEventListener('mousemove', () => focusAllApps(i));
+      t.addEventListener('click', () => { focusAllApps(i); openFromAllApps(); });
+      t.addEventListener('contextmenu', (e) => { e.preventDefault(); focusAllApps(i); allAppsMenu(); });
+      grid.append(t);
+      allApps.list.push(a);
+      allApps.tiles.push(t);
+    }
+  }
+  focusAllApps(0);
+}
+
+function closeAllApps() {
+  allApps = null;
+  $('allapps').classList.add('hidden');
+  setFocus(pos.row, pos.col, true);
+}
+
+function focusAllApps(i) {
+  if (!allApps.tiles[i]) return;
+  allApps.tiles[allApps.index]?.classList.remove('focused');
+  allApps.index = i;
+  allApps.tiles[i].classList.add('focused');
+  allApps.tiles[i].scrollIntoView({ block: 'nearest', behavior: look.still ? 'auto' : 'smooth' });
+}
+
+// Arrows go to the nearest tile that way, across the groups' headings.
+function moveAllApps(dx, dy) {
+  const from = allApps.tiles[allApps.index]?.getBoundingClientRect();
+  if (!from) return;
+  const cx = from.left + from.width / 2;
+  const cy = from.top + from.height / 2;
+  let best = -1;
+  let bestScore = Infinity;
+  allApps.tiles.forEach((t, i) => {
+    if (i === allApps.index) return;
+    const b = t.getBoundingClientRect();
+    const x = b.left + b.width / 2 - cx;
+    const y = b.top + b.height / 2 - cy;
+    const along = dx ? x * dx : y * dy;          // distance the right way
+    const across = Math.abs(dx ? y : x);         // off to the side
+    if (along <= 1 || across > (dx ? from.height / 2 : Infinity)) return;
+    const score = along + across * 3;
+    if (score < bestScore) { bestScore = score; best = i; }
+  });
+  if (best >= 0) { focusAllApps(best); tick(); }
+}
+
+async function openFromAllApps() {
+  const a = allApps.list[allApps.index];
+  if (!a) return;
+  if (a.tile) { select(); closeAllApps(); const r = await api.launch(a.id); if (!r.ok) toast(r.error || `Couldn’t open ${a.name}`); return; }
+  if (a.desktopOnly) { toast(`${a.name} opens only on the Windows desktop`); return; }
+  select();
+  const r = await api.launch(`app:${a.id}`);
+  if (!r.ok) toast(r.error || `Couldn’t open ${a.name}`);
+}
+
+function allAppsMenu() {
+  const a = allApps?.list[allApps.index];
+  if (!a) return;
+  const pinned = (prefs.pins?.[active] || []).some((p) => p.id === a.id);
+  if (a.tile) { openSheet(a.name, [{ label: 'Open', run: () => { closeSheet(); openFromAllApps(); } }, { label: 'Cancel', run: closeSheet }]); return; }
+  openSheet(a.name, [
+    ...(a.desktopOnly ? [] : [{ label: 'Open', run: () => { closeSheet(); openFromAllApps(); } }]),
+    ...(a.desktopOnly ? [] : [pinned
+      ? { label: 'Unpin from Home', run: () => { closeSheet(); unpin(a.id); } }
+      : { label: 'Pin to Home', run: () => { closeSheet(); pin(a); } }]),
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+function pin(a) {
+  const who = active || profiles[0]?.id;
+  const list = prefs.pins?.[who] || [];
+  if (list.some((p) => p.id === a.id)) return;
+  savePref('pins', { ...(prefs.pins || {}), [who]: [...list, { id: a.id, name: a.name.slice(0, 80) }] });
+  toast(`${a.name} is on your Home screen`);
+}
+
+function unpin(appId) {
+  const who = active || profiles[0]?.id;
+  savePref('pins', { ...(prefs.pins || {}), [who]: (prefs.pins?.[who] || []).filter((p) => p.id !== appId) });
+}
+
+// ------------------------------------------------------------------ getting around (D-36)
+// The first time a kind of device is used (main.js and this page notice),
+// a card shows how to get around with it. Settings > Controls shows them
+// again, and can turn the automatic cards off.
+const GUIDES = {
+  keyboard: { name: 'Keyboard', title: 'Using a keyboard', rows: [
+    ['← ↑ → ↓', 'Move'], ['Enter', 'Open · hold it for the app menu'], ['Esc', 'Back'],
+    ['⊞ Windows key', 'Home screen, from any app'],
+    ['Hold ⊞', 'Quick settings: switch apps, address bar, full screen, volume'],
+    ['On a Mac', '⌘ is the Windows key']] },
+  remote: { name: 'TV remote', title: 'Using a TV remote', rows: [
+    ['Arrows · OK', 'Move and open · hold OK for the app menu'], ['Back', 'Back'],
+    ['Home', 'Home screen, from any app'],
+    ['Hold Home', 'Quick settings: switch apps, address bar, full screen, volume, sleep timer'],
+    ['Volume', 'Works over any app']] },
+  gamepad: { name: 'Game controller', title: 'Using a game controller', rows: [
+    ['Stick · D-pad', 'Move'], ['A', 'Open'], ['B', 'Back'], ['Y · Menu', 'App menu'],
+    ['In apps', 'Home is on the remote or the keyboard']] },
+  mouse: { name: 'Mouse or air mouse', title: 'Using a mouse or air mouse', rows: [
+    ['Point', 'Highlight'], ['Click', 'Open'], ['Right-click', 'App menu'], ['Wheel', 'Move along a row'],
+    ['‹ Back', 'Shows at the top left while you use the mouse'],
+    ['Browser', 'Opens with its tabs: + for a new one, × to close one']] },
+};
+let guide = null;            // the kind on screen
+const guidesWaiting = new Set();
+
+function maybeGuide(kind) {
+  if (!GUIDES[kind] || prefs.tutorialsSeen?.includes(kind) || prefs.tips === false) return;
+  if (guide || lock || picker || sheet || !document.hasFocus()) { guidesWaiting.add(kind); return; }
+  openGuide(kind);
+}
+
+function openGuide(kind) {
+  const g = GUIDES[kind];
+  guide = kind;
+  $('g-title').textContent = g.title;
+  const box = $('g-rows');
+  box.innerHTML = '';
+  for (const [keys, what] of g.rows) {
+    const k = document.createElement('kbd');
+    k.textContent = keys;
+    const w = document.createElement('span');
+    w.textContent = what;
+    box.append(k, w);
+  }
+  $('guide').classList.remove('hidden');
+}
+
+function closeGuide() {
+  const kind = guide;
+  guide = null;
+  $('guide').classList.add('hidden');
+  select();
+  if (!prefs.tutorialsSeen?.includes(kind)) savePref('tutorialsSeen', [...(prefs.tutorialsSeen || []), kind]);
+  const next = [...guidesWaiting].find((k) => !prefs.tutorialsSeen?.includes(k) && k !== kind);
+  guidesWaiting.clear();
+  if (next) setTimeout(() => maybeGuide(next), 600);
+}
+
+function controlsRows() {
+  return [
+    { kind: 'toggle', label: 'Tips for new devices', on: prefs.tips !== false, run: (on) => savePref('tips', on) },
+    ...Object.entries(GUIDES).map(([kind, g]) => ({ kind: 'action', label: g.name, value: 'Show', press: () => openGuide(kind) })),
+  ];
+}
+
 // ------------------------------------------------------------------ profile menu
 // The avatar at the top is the second way into Settings (WTV-58): Up from
 // the apps reaches it, OK opens this profile's menu.
@@ -497,8 +716,12 @@ let enterConsumed = false;
 window.addEventListener('keydown', (e) => {
   touched();
   if (wake()) { e.preventDefault(); return; } // the press that wakes the TV does nothing else
-  document.body.classList.remove('pointer');
+  setPointer(false);
   const k = e.key;
+  if (guide) {
+    if (['Enter', ' ', 'Escape', 'Backspace', 'BrowserBack', 'GoBack'].includes(k)) { e.preventDefault(); closeGuide(); }
+    return;
+  }
   // In a text field, letters, Backspace and left/right edit it; OK submits.
   if (e.target instanceof HTMLInputElement) {
     if (k === 'Enter') { e.preventDefault(); sheet?.items[sheet.index]?.run(); }
@@ -529,8 +752,17 @@ window.addEventListener('keyup', (e) => {
 
 // ------------------------------------------------------------------ pointer (air mouse)
 const lean = { x: 0, y: 0, tx: 0, ty: 0 };
+// Pointer mode: while a mouse or air mouse is in use, Back buttons show on
+// screen and Brave opens with its tabs (main.js). Any key ends it.
+function setPointer(on) {
+  if (document.body.classList.contains('pointer') === on) return;
+  document.body.classList.toggle('pointer', on);
+  api.pointer(on);
+  if (on) maybeGuide('mouse');
+}
+
 function pointerOver(e, r, c) {
-  document.body.classList.add('pointer');
+  if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) setPointer(true);
   if (sheet) return;
   if (pos.row !== r || pos.col !== c) setFocus(r, c);
   const b = e.currentTarget.getBoundingClientRect();
@@ -543,7 +775,9 @@ window.addEventListener('wheel', (e) => {
 }, { passive: true });
 window.addEventListener('mousemove', (e) => {
   touched();
-  if (lock && Math.abs(e.movementX) + Math.abs(e.movementY) > 6) wake(); // an air mouse jitters a little
+  const real = Math.abs(e.movementX) + Math.abs(e.movementY) > 6; // an air mouse jitters a little
+  if (lock && real) wake();
+  else if (real) setPointer(true);
 });
 window.addEventListener('mousedown', () => { touched(); wake(); }, true);
 
@@ -558,6 +792,7 @@ function padButton(gp, i, t, fn, repeat) {
 function pollPad(t) {
   for (const gp of navigator.getGamepads?.() || []) {
     if (!gp) continue;
+    if (!pad.seen) { pad.seen = true; maybeGuide('gamepad'); }
     const [ax = 0, ay = 0, rx = 0, ry = 0] = gp.axes;
     const anything = gp.buttons.some((b) => b.pressed) || gp.axes.some((a) => Math.abs(a) > 0.6);
     if (anything) touched();
@@ -685,11 +920,51 @@ function blurred(src) {
 
 const paintBlur = (video) => { $('wall-blur').style.backgroundImage = `url("${blurred(video)}")`; };
 
+// A clip that isn't on screen gives its decoder and frame buffers back
+// (tens of MB each).
+function unloadClip(video) {
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+}
+
+// While an app covers the home screen nobody sees the wallpaper: it goes,
+// and comes back on the same frame when the home screen does.
+let parked = null; // { at, time } while unloaded
+function parkWall() {
+  const v = wallVideo();
+  if (!walls.length || lock || parked || !v.getAttribute('src')) return;
+  parked = { at: wallAt, time: v.currentTime };
+  // A still of the frame stays as the element's poster, so coming back
+  // never shows black while the clip loads again.
+  const c = document.createElement('canvas');
+  c.width = 1920;
+  c.height = 1080;
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  v.poster = c.toDataURL('image/jpeg', 0.85);
+  unloadClip(v);
+}
+
+let parkTimer = 0;
+window.addEventListener('blur', () => { clearTimeout(parkTimer); parkTimer = setTimeout(parkWall, 30000); });
+window.addEventListener('focus', () => { clearTimeout(parkTimer); unparkWall(); });
+async function unparkWall() {
+  if (!parked) return;
+  const { at, time } = parked;
+  parked = null;
+  const v = wallVideo();
+  try {
+    await loadClip(v, walls[at].url, false);
+    await new Promise((resolve) => { v.onseeked = () => { v.onseeked = null; resolve(); }; v.currentTime = time; });
+  } catch { /* the next screen saver loads a clip anyway */ }
+}
+
 async function showWall(i, play) {
   if (!walls.length) return;
   const at = (i + walls.length) % walls.length;
   const next = $(wallFlip ? 'wall-a' : 'wall-b');
   const prev = $(wallFlip ? 'wall-b' : 'wall-a');
+  next.removeAttribute('poster');
   try { await loadClip(next, walls[at].url, !play); } catch { return; } // a frame first, so the fade never shows a blank
   wallAt = at;
   wallFlip = !wallFlip;
@@ -698,7 +973,7 @@ async function showWall(i, play) {
   if (play) next.play().catch(() => {});
   next.classList.add('on');
   prev.classList.remove('on');
-  setTimeout(() => { if (!prev.classList.contains('on')) prev.pause(); }, 2600); // after the crossfade
+  setTimeout(() => { if (!prev.classList.contains('on')) unloadClip(prev); }, 2600); // after the crossfade
   if (!play) paintBlur(next);
   const w = walls[at];
   $('lock-credit').textContent = [w.title, `Video: ${w.artist || 'Wikimedia Commons'}`, w.license, 'Wikimedia Commons'].filter(Boolean).join(' · ');
@@ -735,7 +1010,8 @@ async function nextClip() {
 }
 
 // Screen saver on: the held frame comes alive, gathering speed.
-function playWall() {
+async function playWall() {
+  if (parked) await unparkWall(); // woken from sleep straight after an app
   if (look.still) { clearTimeout(clipTimer); clipTimer = setTimeout(nextClip, CLIP_MAX_MS); return; } // stills, changing
   const v = wallVideo();
   v.playbackRate = 0.0625;
@@ -813,6 +1089,7 @@ const SECTIONS = [
   { id: 'sound', name: 'Sound', glyph: 'sound' },
   { id: 'saver', name: 'Screen Saver', glyph: 'moon' },
   { id: 'access', name: 'Accessibility', glyph: 'access' },
+  { id: 'controls', name: 'Controls', glyph: 'gamepad' },
   { id: 'network', name: 'Network', glyph: 'globe' },
   { id: 'updates', name: 'Updates', glyph: 'update' },
   { id: 'about', name: 'About', glyph: 'info' },
@@ -828,6 +1105,8 @@ const NOTES = {
     + 'Turning off the screen and sleep apply while the PC is plugged in.',
   access: () => 'Text size and high contrast change WinTV’s own screens, over every app too. '
     + 'Reduce motion also asks apps and websites to keep still.',
+  controls: () => 'The first time you use a keyboard, a remote, a controller or a mouse, WinTV shows how to get around with it. '
+    + 'Turn the tips off here, or show any of them again.',
   updates: () => 'Windows installs its updates by itself too; “Install now” only does it sooner. '
     + 'WinTV updates are checked every day, and switch in when no app is open.',
   about: () => (repair.open ? 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
@@ -978,6 +1257,7 @@ async function sectionRows(id) {
   if (id === 'sound') return soundRows(result(await api.system('audio.get')));
   if (id === 'saver') return saverRows(result(await api.system('power.get')));
   if (id === 'access') return accessRows();
+  if (id === 'controls') return controlsRows();
   if (id === 'network') return networkRows(result(await api.system('network.get')));
   if (id === 'updates') return updateRows(result(await api.updates('get')));
   return aboutRows(result(await api.system('about')));
@@ -1366,6 +1646,8 @@ function watchIdle() {
     touched();
     closeSheet();
     if (settings) closeSettings();
+    if (allApps) closeAllApps();
+    if (guide) closeGuide();
     setFocus(pos.row, pos.col, true);
   });
   // The PC woke from sleep: the clock screen, and the next button asks who is
@@ -1375,6 +1657,8 @@ function watchIdle() {
     else if (prefs.askWhoMinutes > 0 && profiles.length > 1) openPicker();
   });
   api.onPrefs(usePrefs);
+  api.onDevice(maybeGuide);
+  for (const el of document.querySelectorAll('.back-btn')) el.addEventListener('click', () => { touched(); back(); });
   api.onPicker(() => { if (lock) wake(); if (profiles.length > 1 && !picker) openPicker(); });
   if (profiles.length > 1) openPicker(); else paintMe();
   clock();

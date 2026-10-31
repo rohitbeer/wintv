@@ -17,6 +17,7 @@ const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonito
 process.on('uncaughtException', (e) => { try { process.stderr.write(String(e && e.stack || e)); } catch { /* nothing to write to */ } app.exit(1); });
 const { spawn, execFile } = require('node:child_process');
 const { Readable } = require('node:stream');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -42,7 +43,9 @@ let win = null;
 let quitting = false;
 let config = null;
 let profile = null;        // active WinTV profile (the TV's own sign-in, not a Windows account)
-const running = new Map(); // app id -> { pid, dir } (dir: the app's browser profile, for web apps)
+const running = new Map(); // app id -> { pid, dir, full } (dir: the app's browser profile; full: in full screen)
+let frontApp = null;       // the app last opened or switched to, while one is in front of the home screen
+let pointerMode = false;   // a mouse or air mouse is in use: the browser opens with its tabs (D-36)
 
 // ---------------------------------------------------------------- logging
 function logFile() {
@@ -116,8 +119,35 @@ function visible(list) {
 }
 
 function findItem(id) {
-  const a = [...config.apps, ...config.system].find((x) => x.id === id);
+  const a = [...config.apps, ...pinnedItems(), ...config.system].find((x) => x.id === id);
   return a ? resolve(a) : null;
+}
+
+// ---------------------------------------------------------------- All apps (D-37)
+// Every app Windows lists for this account (system.ps1 apps.list). Only apps
+// from the last list, or pinned ones, may be opened. Pinned apps are tiles
+// on the home row, per profile.
+let knownApps = new Map(); // AppID -> { name, icon }
+const appKey = (appId) => crypto.createHash('sha1').update(appId).digest('hex').slice(0, 16);
+const iconUrl = (appId) => `wintv://ui/cache/icons/${appKey(appId)}.png`;
+
+async function listApps() {
+  const r = await system('apps.list', {}, 90000); // the first time draws every icon
+  if (!r.ok) return r;
+  knownApps = new Map(r.result.apps.map((a) => [a.id, a]));
+  return { ok: true, result: r.result.apps.map((a) => ({ ...a, icon: a.icon ? iconUrl(a.id) : null })) };
+}
+
+function pinsOf(profileId) {
+  return prefs.pins?.[profileId] || [];
+}
+
+function pinnedItems() {
+  const who = profile || config.profiles[0];
+  return pinsOf(who?.id).map((p) => ({
+    id: `pin-${appKey(p.id)}`, name: p.name, kind: 'start', appid: p.id, glyph: 'apps', logo: p.id,
+    eyebrow: 'Pinned', tagline: 'Pinned from All apps. Hold OK to unpin.', colors: ['#2e2e36', '#121216'],
+  }));
 }
 
 // ---------------------------------------------------------------- launching
@@ -139,7 +169,7 @@ function publicState() {
     ({ id, name, kind, tagline, eyebrow, colors, glyph, available, reason, row,
       logo: logoUrl(logo), logoStyle: logoStyle === 'wordmark' ? 'wordmark' : 'icon', logoWhite: logoWhite === true });
   return {
-    apps: visible(config.apps).map(strip),
+    apps: [...visible(config.apps).map(strip), ...pinnedItems().map((p) => ({ ...strip(resolve(p)), logo: iconUrl(p.appid) }))],
     system: visible(config.system).map(strip),
     running: [...running.keys()],
     profiles: profileList(),
@@ -213,9 +243,12 @@ function optInWidevine(dir) {
 function browserArgs(item) {
   const who = profile || config.profiles[0];
   const dir = profileDir(item);
+  // Apps fill the screen. The browser too, except for someone using a mouse,
+  // who gets Brave's tabs and toolbar to click (D-36).
+  const full = item.kind === 'web' || !pointerMode;
   const args = [
     `--user-data-dir=${dir}`,
-    '--start-fullscreen',
+    full ? '--start-fullscreen' : '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
     '--autoplay-policy=no-user-gesture-required',
@@ -304,6 +337,12 @@ const SYSTEM_OPS = {
   'power.get': () => ({}),
   'power.set': (a) => (a.screenOff !== undefined ? { screenOff: oneOf(a.screenOff, SCREEN_OFF_STEPS) } : { sleep: oneOf(a.sleep, IDLE_SLEEP_STEPS) }),
   'motion.set': (a) => ({ reduce: a.reduce === true }),
+  'apps.list': () => ({}),
+  'apps.open': (a) => {
+    const who = profile || config.profiles[0];
+    if (typeof a.app !== 'string' || !(knownApps.has(a.app) || pinsOf(who?.id).some((p) => p.id === a.app))) throw new Error('bad argument');
+    return { app: a.app };
+  },
   about: () => ({}),
   'process.find': (a) => {
     const root = expand('${PROFILES}') + path.sep;
@@ -330,7 +369,7 @@ function startHelper() {
   });
 }
 
-async function system(op, args) {
+async function system(op, args, timeoutMs = 20000) {
   const check = SYSTEM_OPS[op];
   if (!check) return { ok: false, error: 'Unknown setting' };
   let clean;
@@ -343,7 +382,7 @@ async function system(op, args) {
       helperWaiting.delete(id);
       stopHelper(`${op} timed out`); // a stuck helper would block every later request
       done({ ok: false, error: 'Windows did not answer' });
-    }, 20000);
+    }, timeoutMs);
     helperWaiting.set(id, (msg) => { clearTimeout(timer); done(msg); });
     helper.stdin.write(JSON.stringify({ id, op, ...clean }) + '\n');
   });
@@ -364,6 +403,9 @@ const PREFS = {
   highContrast: [false, true],
   weatherPlace: (v) => v === null || isPlace(v),
   profileLooks: (v) => isProfileLooks(v),
+  tips: [true, false],
+  pins: (v) => isPins(v),
+  tutorialsSeen: (v) => Array.isArray(v) && v.length <= 4 && v.every((k) => ['keyboard', 'remote', 'gamepad', 'mouse'].includes(k)),
 };
 let prefs = null;
 
@@ -381,6 +423,12 @@ function isProfileLooks(v) {
     && look && typeof look === 'object'
     && (look.name === undefined || (typeof look.name === 'string' && /^[^\u0000-\u001f\u007f<>]{1,24}$/.test(look.name.trim())))
     && (look.colour === undefined || look.colour in PROFILE_COLOURS));
+}
+
+function isPins(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  return Object.entries(v).every(([id, list]) => config.profiles.some((p) => p.id === id) && Array.isArray(list) && list.length <= 40
+    && list.every((p) => p && typeof p.id === 'string' && p.id.length <= 300 && typeof p.name === 'string' && p.name.length > 0 && p.name.length <= 80));
 }
 
 function profileList() {
@@ -414,6 +462,9 @@ function loadPrefs() {
     highContrast: false,
     weatherPlace: config.weather,
     profileLooks: {},
+    tips: true,
+    tutorialsSeen: [],
+    pins: {},
   };
   for (const key of Object.keys(PREFS)) if (key in saved && prefOk(key, saved[key])) prefs[key] = saved[key];
 }
@@ -438,7 +489,8 @@ async function setPref(key, value) {
     return { ok: false, error: 'Could not save the setting' };
   }
   log('prefs:', key, value && typeof value === 'object' ? 'changed' : String(value));
-  if (win && !win.isDestroyed()) win.webContents.send(key === 'profileLooks' ? 'state' : 'prefs', key === 'profileLooks' ? publicState() : prefs);
+  if (win && !win.isDestroyed()) win.webContents.send('prefs', prefs);
+  if (win && !win.isDestroyed() && (key === 'profileLooks' || key === 'pins')) win.webContents.send('state', publicState());
   layerSend('prefs', prefs);
   return { ok: true, result: prefs };
 }
@@ -484,18 +536,31 @@ async function appGone(id, pid) {
     }
   }
   running.delete(id);
+  if (frontApp === id) frontApp = null;
   pushState();
   goHome('app-exit');
 }
 
 async function launch(id) {
+  // Straight from All apps: an AppID Windows listed (system.ps1 checks nothing; SYSTEM_OPS does).
+  if (id.startsWith('app:')) {
+    const r = await system('apps.open', { app: id.slice(4) });
+    if (r.ok) log('launch app', id.slice(4));
+    return r.ok ? { ok: true } : { ok: false, error: 'Windows couldn’t open it' };
+  }
   const item = findItem(id);
   if (!item) return { ok: false, error: 'Unknown app' };
   if (!item.available) return { ok: false, error: item.reason };
   log('launch', id);
 
   const alive = running.get(id);
-  if (alive) { await raise(alive.pid); return { ok: true, raised: true }; }
+  if (alive) { frontApp = id; await raise(alive.pid); return { ok: true, raised: true }; }
+
+  if (item.kind === 'start') {
+    const r = await system('apps.open', { app: item.appid });
+    if (!r.ok) return { ok: false, error: `Couldn't open ${item.name}` };
+    return { ok: true };
+  }
 
   if (item.kind === 'uri') {
     try { await shell.openExternal(item.uri); return { ok: true }; }
@@ -525,7 +590,12 @@ async function launch(id) {
       return;
     }
     child.once('error', (e) => { log('launch error', id, e.message); running.delete(id); pushState(); resolve({ ok: false, error: e.message }); });
-    child.once('spawn', () => { running.set(id, { pid: child.pid, dir }); pushState(); resolve({ ok: true }); });
+    child.once('spawn', () => {
+      running.set(id, { pid: child.pid, dir, full: dir !== null && (item.kind === 'web' || !pointerMode) });
+      frontApp = id;
+      pushState();
+      resolve({ ok: true });
+    });
     child.once('exit', (code) => {
       log('exit', id, String(code));
       appGone(id, child.pid);
@@ -552,6 +622,7 @@ async function setProfile(id) {
   }
   profile = next;
   log('profile', next.id);
+  if (win && !win.isDestroyed()) win.webContents.send('state', publicState()); // that profile's pinned tiles
   return { ok: true };
 }
 
@@ -604,6 +675,7 @@ function onInput(msg) {
   } else if (msg.ev === 'text') onTextFocus(msg);
   else if (msg.ev === 'hwtype') { hwKeyboardAt = Date.now(); closeSurface('keyboard'); }
   else if (msg.ev === 'grab-expired') { log('input: grab expired'); closeSurfaces(); }
+  else if (msg.ev === 'device') deviceSeen(msg.kind);
   else if (msg.ev === 'ready') { log(`input: ready hook=${msg.hook} uia=${msg.uia}`); syncGrab(); }
   else if (msg.ev === 'error') log('input:', msg.message);
 }
@@ -736,7 +808,11 @@ function closeSurfaces(except = []) {
 async function openQuick() {
   if (surfaces.has('quick')) { closeSurface('quick'); return; } // hold Home again to close
   const audio = await system('audio.get');
+  const front = frontApp && running.has(frontApp) && win && !win.isFocused() ? findItem(frontApp) : null;
   openSurface('quick', {
+    // The app in front, and the others open behind it to switch to.
+    app: front ? { id: front.id, name: front.name, kind: front.kind, full: running.get(front.id).full } : null,
+    others: [...running.keys()].filter((id) => id !== front?.id).map((id) => ({ id, name: findItem(id)?.name || id })),
     audio: audio.ok ? audio.result : null,
     sleep: sleepState(),
     sleepSteps: SLEEP_STEPS,
@@ -813,6 +889,32 @@ const LAYER_ACTIONS = {
   },
   'sleep-now': () => { setSleepTimer(0); closeSurfaces(); setTimeout(() => power('sleep'), 300); return {}; },
   who: () => { goHome('who is watching'); win.webContents.send('picker'); return {}; },
+  // Switching contexts (D-36): another open app, the browser's address bar,
+  // full screen. The keys go to the app in front (the layer never has the
+  // focus), once quick settings has closed and the OK button is let go.
+  switch: (id) => {
+    if (!running.has(id)) throw new Error('bad argument');
+    closeSurfaces();
+    launch(id); // raises it
+    return {};
+  },
+  fullscreen: () => {
+    const entry = running.get(frontApp);
+    if (!entry?.dir) throw new Error('No browser app in front');
+    entry.full = !entry.full;
+    closeSurfaces();
+    setTimeout(() => inputSend({ op: 'key', key: 'f11' }), 400);
+    return {};
+  },
+  address: () => {
+    const entry = running.get(frontApp);
+    if (!entry?.dir) throw new Error('No browser in front');
+    const keys = entry.full ? ['f11', 'address'] : ['address']; // the address bar shows only outside full screen
+    entry.full = false;
+    closeSurfaces();
+    keys.forEach((key, i) => setTimeout(() => inputSend({ op: 'key', key }), 400 + i * 500));
+    return {};
+  },
   volume: async (v) => result(await system('audio.set', { volume: v })),
   mute: async (on) => result(await system('audio.set', { muted: on === true })),
 };
@@ -961,7 +1063,7 @@ function serveUi() {
     const url = new URL(req.url);
     if (url.host !== 'ui') return new Response('', { status: 404 });
     // Files art.js downloaded: only names it writes itself.
-    const cached = /^\/cache\/(videos|logos)\/([0-9a-f]{16}\.(?:webm|png))$/.exec(url.pathname);
+    const cached = /^\/cache\/(videos|logos|icons)\/([0-9a-f]{16}\.(?:webm|png))$/.exec(url.pathname);
     if (cached) return serveCached(req, path.join(CACHE_DIR, cached[1], cached[2]));
     const file = path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
     if (!file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
@@ -974,9 +1076,23 @@ function serveUi() {
 }
 
 // ---------------------------------------------------------------- window
+// The first time a kind of device is used, the home screen shows how to get
+// around with it (D-36); in an app, it waits until the home screen is back.
+const DEVICES = ['keyboard', 'remote', 'gamepad', 'mouse'];
+let pendingDevice = null;
+
+function deviceSeen(kind) {
+  if (!DEVICES.includes(kind) || prefs.tutorialsSeen.includes(kind) || !prefs.tips) return;
+  log('device: first', kind);
+  if (win && !win.isDestroyed() && win.isFocused()) win.webContents.send('device', kind);
+  else pendingDevice = kind;
+}
+
 function goHome(reason) {
   if (!win || win.isDestroyed()) return;
   log('home', reason);
+  frontApp = null;
+  if (pendingDevice) { win.webContents.send('device', pendingDevice); pendingDevice = null; }
   closeSurfaces(['volume', 'notice']); // the sleep-timer warning stays until answered
   if (win.isMinimized()) win.restore();
   win.show();
@@ -1146,6 +1262,9 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:weather', fromHome(() => weatherNow()));
     ipcMain.handle('wintv:places', fromHome((name) => findPlaces(name)));
     // The home screen's own text fields (the weather town) call up the keyboard.
+    ipcMain.handle('wintv:apps', fromHome(() => listApps()));
+    ipcMain.handle('wintv:device', fromHome((kind) => { deviceSeen(String(kind)); return { ok: true }; }));
+    ipcMain.handle('wintv:pointer', fromHome((on) => { pointerMode = on === true; return { ok: true }; }));
     ipcMain.handle('wintv:keyboard', fromHome((on) => { if (on === true) openKeyboard(false, true); else closeSurface('keyboard'); return { ok: true }; }));
     layerIpc();
     if (config.profiles.length === 1) profile = config.profiles[0];
