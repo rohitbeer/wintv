@@ -285,6 +285,37 @@ async function activate() {
   if (!res.ok) toast(res.error || `Could not open ${item.name}`);
 }
 
+// Lists follow the focus with every press, the way TV grids do: the focused
+// row stays at one height on the screen (the keyline, a share of the list's
+// height from its top) and the list glides under it; at the ends it stops, so
+// the title shows again at the top. Not scrollIntoView: "nearest" only moves
+// once the focus touches an edge (then leaves it cut off there), and its
+// smooth scroll falls behind when presses come quicker than it finishes.
+const glides = new WeakMap(); // list -> { at, to, last, raf }
+function follow(box, el, keyline) {
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const max = box.scrollHeight - box.clientHeight;
+  const to = Math.min(max, Math.max(0, box.scrollTop + r.top + r.height / 2 - b.top - box.clientTop - box.clientHeight * keyline));
+  let g = glides.get(box);
+  if (!g) glides.set(box, (g = { at: 0, to: 0, last: 0, raf: 0 }));
+  g.to = to;
+  if (look.still) { cancelAnimationFrame(g.raf); g.raf = 0; box.scrollTop = to; return; }
+  if (g.raf) return; // already gliding: it heads for the new target from where it is
+  g.at = box.scrollTop;
+  g.last = performance.now();
+  const step = (now) => {
+    // Time-based, not per frame: a slow frame (software rendering) jumps further.
+    const dt = Math.max(0, now - g.last);
+    g.last = now;
+    g.at += (g.to - g.at) * (1 - Math.exp(-dt / 85)); // eases out, catches up within ~0.3 s
+    if (Math.abs(g.to - g.at) < 0.5) g.at = g.to;
+    box.scrollTop = g.at;
+    g.raf = g.at === g.to ? 0 : requestAnimationFrame(step);
+  };
+  g.raf = requestAnimationFrame(step);
+}
+
 function openSheet(title, items, start = 0) {
   sheet = { items, index: 0, buttons: [] };
   $('sheet-title').textContent = title;
@@ -296,8 +327,8 @@ function openSheet(title, items, start = 0) {
     b.tabIndex = -1;
     if (it.input) Object.assign(b, { type: 'text', placeholder: it.label, value: it.value || '', spellcheck: false, autocomplete: 'off' });
     else b.textContent = it.label;
-    b.addEventListener('mousemove', () => focusSheet(i));
-    b.addEventListener('click', () => { focusSheet(i); it.run(); });
+    b.addEventListener('mousemove', () => focusSheet(i, true));
+    b.addEventListener('click', () => { focusSheet(i, true); it.run(); });
     box.append(b);
     return b;
   });
@@ -305,14 +336,16 @@ function openSheet(title, items, start = 0) {
   $('sheet').classList.remove('hidden');
 }
 
-function focusSheet(i) {
+function focusSheet(i, byPointer = false) {
   sheet.buttons[sheet.index]?.classList.remove('focused');
   sheet.index = i;
   sheet.buttons[i].classList.add('focused');
   // A text field takes the focus and calls up the TV's keyboard (it types
   // into whatever has the focus, this window included).
   if (sheet.buttons[i].tagName === 'INPUT') { sheet.buttons[i].focus(); $('sheet').classList.add('typing'); api.keyboard(true); } else leaveField();
-  sheet.buttons[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); // long lists scroll
+  // Long lists scroll. Not for the pointer: it is already on the choice, and
+  // the list sliding under it would hand the focus on to the next one.
+  if (!byPointer) follow($('sheet-items'), sheet.buttons[i], 0.5);
 }
 
 function moveSheet(dy) {
@@ -451,6 +484,7 @@ let allApps = null; // { list, tiles, index } while open
 async function openAllApps() {
   allApps = { list: [], tiles: [], index: 0 };
   $('allapps').classList.remove('hidden');
+  $('allapps').scrollTop = 0;
   $('aa-groups').innerHTML = '<p class="aa-wait">Finding your apps…</p>';
   const r = await api.apps();
   if (!allApps) return;
@@ -494,9 +528,9 @@ async function openAllApps() {
       const n = document.createElement('span');
       n.textContent = a.name;
       t.append(n);
-      t.addEventListener('mousemove', () => focusAllApps(i));
-      t.addEventListener('click', () => { focusAllApps(i); openFromAllApps(); });
-      t.addEventListener('contextmenu', (e) => { e.preventDefault(); focusAllApps(i); allAppsMenu(); });
+      t.addEventListener('mousemove', () => focusAllApps(i, true));
+      t.addEventListener('click', () => { focusAllApps(i, true); openFromAllApps(); });
+      t.addEventListener('contextmenu', (e) => { e.preventDefault(); focusAllApps(i, true); allAppsMenu(); });
       grid.append(t);
       allApps.list.push(a);
       allApps.tiles.push(t);
@@ -511,12 +545,12 @@ function closeAllApps() {
   setFocus(pos.row, pos.col, true);
 }
 
-function focusAllApps(i) {
+function focusAllApps(i, byPointer = false) {
   if (!allApps.tiles[i]) return;
   allApps.tiles[allApps.index]?.classList.remove('focused');
   allApps.index = i;
   allApps.tiles[i].classList.add('focused');
-  allApps.tiles[i].scrollIntoView({ block: 'nearest', behavior: look.still ? 'auto' : 'smooth' });
+  if (!byPointer) follow($('allapps'), allApps.tiles[i], 0.42); // as in focusSheet
 }
 
 // Arrows go to the nearest tile that way, across the groups' headings.
