@@ -8,6 +8,9 @@ Invoke-Step 'autologon' { Set-AutoLogon }
 if ((Test-Path $EdgeRemovedMark) -and (Test-Path $EdgeExe)) {
     Invoke-Step 'Edge came back: removing it again' { Remove-Edge }
 }
+# The machine policies again: an update of WinTV may bring new ones (D-42),
+# and Windows feature updates sometimes reset some.
+Invoke-Step 'policies' { Invoke-Native "$env:SystemRoot\System32\reg.exe" @('import', "$PSScriptRoot\policies.reg") | Out-Null }
 # Updates bring new setup scripts but don't register tasks; a task a newer
 # release needs comes here, at the next boot (D-39).
 Invoke-Step 'admin tasks' { Register-AdminTask }

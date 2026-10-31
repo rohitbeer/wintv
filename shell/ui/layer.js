@@ -57,7 +57,7 @@ function show(name, data) {
 function hide(name, tell = true) {
   if (!open.delete(name)) return;
   $(ELEMENTS[name]).classList.add('hidden');
-  if (name === 'notice') clearInterval(notice?.timer);
+  if (name === 'notice') { clearInterval(notice?.timer); clearTimeout(notice?.gone); }
   if (name === 'volume') clearTimeout(volTimer);
   if (tell) api.close(name);
 }
@@ -437,15 +437,38 @@ function showVolume(a) {
 }
 
 // ------------------------------------------------------------------ notice
-// The sleep timer's last minute: OK (or Back) keeps watching.
-let notice = null; // { buttons, index, timer, at }
+// The sleep timer's last minute: OK (or Back) keeps watching. A drive plugged
+// in: Open in Files, or Not now; it goes by itself after 15 s (D-42).
+let notice = null; // { buttons, index, timer, at, back, gone }
 function showNotice(d) {
   clearInterval(notice?.timer);
+  clearTimeout(notice?.gone);
+  if (d.kind === 'drive') {
+    $('n-title').textContent = d.removable ? 'USB drive' : 'Drive';
+    $('n-text').textContent = `${d.name} (${d.letter}) is connected.`;
+    notice = { index: 0, back: () => hide('notice'), buttons: [
+      { label: 'Open in Files', run: () => { hide('notice'); api.action('open-files', d.root); } },
+      { label: 'Not now', run: () => hide('notice') },
+    ] };
+    notice.gone = setTimeout(() => api.action('notice-expired'), 15000); // main closes it, keeping the remote 1 s
+    paintNoticeButtons();
+    return;
+  }
   $('n-title').textContent = 'Sleep timer';
-  notice = { index: 0, at: d.at, buttons: [
+  notice = { index: 0, at: d.at, back: () => notice.buttons[0].run(), buttons: [
     { label: 'Keep watching', run: () => { api.action('sleep-timer', 0); hide('notice'); } },
     { label: 'Sleep now', run: () => { hide('notice'); api.action('sleep-now'); } },
   ] };
+  paintNoticeButtons();
+  const count = () => {
+    const s = Math.max(0, Math.round((notice.at - Date.now()) / 1000));
+    $('n-text').textContent = `The TV goes to sleep in ${s} s.`;
+  };
+  count();
+  notice.timer = setInterval(count, 1000);
+}
+
+function paintNoticeButtons() {
   const box = $('n-buttons');
   box.innerHTML = '';
   notice.els = notice.buttons.map((b, i) => {
@@ -457,12 +480,6 @@ function showNotice(d) {
     box.append(el);
     return el;
   });
-  const count = () => {
-    const s = Math.max(0, Math.round((notice.at - Date.now()) / 1000));
-    $('n-text').textContent = `The TV goes to sleep in ${s} s.`;
-  };
-  count();
-  notice.timer = setInterval(count, 1000);
   paintNotice();
 }
 
@@ -471,7 +488,8 @@ function paintNotice() {
 }
 
 function noticeKey(k) {
-  if (k === 'back') { notice.buttons[0].run(); return; }
+  if (k === 'back') { notice.back(); return; }
+  clearTimeout(notice.gone); // someone is answering it
   if (k === 'ok') { click(); notice.buttons[notice.index].run(); return; }
   const dir = k === 'left' || k === 'up' ? -1 : 1;
   const i = notice.index + dir;

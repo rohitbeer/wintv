@@ -1,0 +1,13 @@
+Windows Registry Editor Version 5.00
+
+; WinTV machine policies that only setup can write: after setup Windows locks
+; these keys (Communications belongs to TrustedInstaller), so the boot task's
+; import of policies.reg leaves them out (D-42). Values stay as setup set them.
+
+; Widgets / News and Interests
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Dsh]
+"AllowNewsAndInterests"=dword:00000000
+
+; Teams/Chat auto-install
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications]
+"ConfigureChatAutoInstall"=dword:00000000

@@ -88,6 +88,8 @@ const api = window.wintv || {
   onLock: () => {},
   onPicker: () => {},
   onPrefs: () => {},
+  onFiles: () => {},
+  onDrives: () => {},
 };
 
 // Files in a plain browser: a few folders, a USB stick and a Recycle Bin.
@@ -672,8 +674,9 @@ const fmtDay = (ms) => new Date(ms).toLocaleDateString([], new Date(ms).getFullY
 const lastPart = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 const placeName = (p) => (p.letter ? `${p.name} (${p.letter})` : p.count ? `${p.name} · ${p.count}` : p.name);
 
-async function openFiles() {
-  files = { places: [], side: 0, col: 'side', place: null, stack: [], items: [], tiles: [], index: 0, removable: false, token: 0 };
+// `root`: open at that drive (the drive notice's "Open in Files", D-42).
+async function openFiles(root = null) {
+  files = { places: [], side: 0, col: root ? 'items' : 'side', place: null, stack: [], items: [], tiles: [], index: 0, removable: false, token: 0 };
   $('files').classList.remove('hidden');
   $('fl-items').innerHTML = '';
   $('fl-path').textContent = '';
@@ -681,6 +684,20 @@ async function openFiles() {
   if (!files) return;
   if (!r.ok) { toast(r.error || 'Couldn’t open Files'); closeFiles(); return; }
   files.places = [...r.result.places, { ...BIN_PLACE, count: r.result.bin }];
+  pickPlace(Math.max(0, files.places.findIndex((p) => p.path === root)));
+}
+
+// A drive came or went: the list on the left follows. If the open drive went,
+// back to Downloads.
+async function refreshPlaces() {
+  const r = await api.files('places');
+  if (!files || !r.ok) return;
+  const was = files.place?.id;
+  files.places = [...r.result.places, { ...BIN_PLACE, count: r.result.bin }];
+  const i = files.places.findIndex((p) => p.id === was);
+  if (i >= 0) { files.side = i; files.place = files.places[i]; paintPlaces(); return; }
+  closeViewer();
+  files.col = 'side';
   pickPlace(0);
 }
 
@@ -2189,6 +2206,16 @@ function watchIdle() {
   });
   api.onPrefs(usePrefs);
   api.onDevice(maybeGuide);
+  api.onFiles((root) => {
+    wake();
+    closeSheet();
+    if (settings) closeSettings();
+    if (allApps) closeAllApps();
+    closeViewer();
+    if (files) closeFiles();
+    openFiles(root);
+  });
+  api.onDrives(() => { if (files) refreshPlaces(); });
   for (const el of document.querySelectorAll('.back-btn')) el.addEventListener('click', () => { touched(); back(); });
   api.onPicker(() => { if (lock) wake(); if (profiles.length > 1 && !picker) openPicker(); });
   if (profiles.length > 1) openPicker(); else paintMe();

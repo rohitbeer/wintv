@@ -772,9 +772,13 @@ function layerSend(channel, data) {
   if (layer && !layer.isDestroyed()) layer.webContents.send(channel, data);
 }
 
+// After a notice goes by itself, the remote stays with the layer a moment
+// longer: an OK meant for the notice must not land on the app behind it
+// (seen on VM 223: OK 0.4 s too late opened YouTube, D-42).
+let graceUntil = 0;
 function syncGrab() {
   const interactive = [...surfaces].some((s) => INTERACTIVE.includes(s));
-  inputSend({ op: 'grab', on: interactive });
+  inputSend({ op: 'grab', on: interactive || Date.now() < graceUntil });
   if (layer && !layer.isDestroyed()) layer.setIgnoreMouseEvents(!interactive);
 }
 
@@ -891,6 +895,20 @@ const LAYER_ACTIONS = {
     return setSleepTimer(m);
   },
   'sleep-now': () => { setSleepTimer(0); closeSurfaces(); setTimeout(() => power('sleep'), 300); return {}; },
+  'notice-expired': () => {
+    graceUntil = Date.now() + 1000;
+    closeSurface('notice');
+    setTimeout(syncGrab, 1050);
+    return {};
+  },
+  // The drive notice's "Open in Files" (D-42): only a drive Files shows.
+  'open-files': (root) => {
+    if (!drivePlaces().some((p) => p.path === root)) throw new Error('bad argument');
+    closeSurfaces();
+    goHome('files');
+    win.webContents.send('files', root);
+    return {};
+  },
   who: () => { goHome('who is watching'); win.webContents.send('picker'); return {}; },
   // Switching contexts (D-36): another open app, the browser's address bar,
   // full screen. The keys go to the app in front (the layer never has the
@@ -970,7 +988,30 @@ let drives = { at: 0, list: [], sid: null };
 async function refreshDrives() {
   if (!IS_WIN || Date.now() - drives.at < 5000) return;
   const r = await system('drives.get', {});
-  if (r.ok) drives = { at: Date.now(), list: r.result.drives || [], sid: r.result.sid || null };
+  if (r.ok) { drives = { at: Date.now(), list: r.result.drives || [], sid: r.result.sid || null }; drivesKnown = true; }
+}
+
+// A drive plugged in or out (WM_DEVICECHANGE). Without Explorer there is no
+// AutoPlay, so nothing on the TV would say a USB stick was seen: a notice in
+// the system layer offers Files (D-42). Files reloads its list either way.
+let drivesKnown = false;
+let driveTimer = 0;
+function deviceChanged() {
+  clearTimeout(driveTimer);
+  driveTimer = setTimeout(async () => {
+    const before = new Set(drives.list.map((d) => d.root));
+    const knew = drivesKnown;
+    drives.at = 0;
+    await refreshDrives();
+    if (!drives.at) return;
+    drivesKnown = true;
+    if (win && !win.isDestroyed()) win.webContents.send('drives');
+    const added = drivePlaces().find((p) => !before.has(p.path));
+    if (knew && added) {
+      log('drive: in', added.letter);
+      openSurface('notice', { kind: 'drive', name: added.name, letter: added.letter, root: added.path, removable: added.removable });
+    }
+  }, 1500);
 }
 
 function folderPlaces() {
@@ -1323,13 +1364,21 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  // DBT_DEVICEARRIVAL / DBT_DEVICEREMOVECOMPLETE reach every top-level window (D-42).
+  if (IS_WIN) {
+    win.hookWindowMessage(0x0219, (wParam) => {
+      const event = wParam.readUInt32LE(0);
+      if (event === 0x8000 || event === 0x8004) deviceChanged();
+    });
+  }
   win.loadURL('wintv://ui/index.html');
   win.once('ready-to-show', () => {
     log('window ready');
     win.show();
     // Start the Settings helper in the background: PowerShell takes a second
     // or two to start, which would otherwise delay the first Settings page.
-    setTimeout(() => { if (IS_WIN && !helper) helper = startHelper(); }, 3000);
+    // Then learn the drives, so the first USB stick plugged in is news (D-42).
+    setTimeout(() => { if (IS_WIN && !helper) helper = startHelper(); refreshDrives(); }, 3000);
   });
   win.on('close', (e) => { if (!quitting) e.preventDefault(); }); // Alt+F4 must not kill the shell
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

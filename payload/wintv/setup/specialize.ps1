@@ -19,6 +19,7 @@ Invoke-Step 'remove provisioned apps (allow-list)' {
 
 Invoke-Step 'machine policies' {
     Invoke-Native "$env:SystemRoot\System32\reg.exe" @('import', "$PSScriptRoot\policies.reg") | Out-Null
+    Invoke-Native "$env:SystemRoot\System32\reg.exe" @('import', "$PSScriptRoot\policies-setup.reg") | Out-Null
 }
 
 Invoke-Step 'default user profile (every new account starts clean)' {

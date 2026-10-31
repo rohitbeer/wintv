@@ -207,6 +207,35 @@ namespace WinTV {
                 return true;
             } finally { DeleteObject(hbm); }
         }
+
+        // True if the program's own manifest asks for admin rights
+        // (requireAdministrator). The TV account gets no admin prompt (D-42):
+        // Windows would show "blocked by your system administrator" instead,
+        // so such programs belong on the admin's desktop. "highestAvailable"
+        // (Registry Editor, Task Manager) runs as the TV account and is fine.
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern IntPtr LoadLibraryEx(string file, IntPtr reserved, uint flags);
+        [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr h);
+        [DllImport("kernel32.dll")] static extern IntPtr FindResource(IntPtr h, IntPtr name, IntPtr type);
+        [DllImport("kernel32.dll")] static extern IntPtr LoadResource(IntPtr h, IntPtr res);
+        [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr data);
+        [DllImport("kernel32.dll")] static extern uint SizeofResource(IntPtr h, IntPtr res);
+
+        public static bool NeedsAdmin(string exe) {
+            IntPtr h = LoadLibraryEx(exe, IntPtr.Zero, 0x2 | 0x20); // as data: resources only, nothing runs
+            if (h == IntPtr.Zero) return false;
+            try {
+                IntPtr res = FindResource(h, (IntPtr)1, (IntPtr)24); // the program's manifest (RT_MANIFEST 1)
+                if (res == IntPtr.Zero) return false;
+                IntPtr data = LockResource(LoadResource(h, res));
+                int size = (int)SizeofResource(h, res);
+                if (data == IntPtr.Zero || size <= 0) return false;
+                var bytes = new byte[size];
+                Marshal.Copy(data, bytes, 0, size);
+                return System.Text.RegularExpressions.Regex.IsMatch(System.Text.Encoding.UTF8.GetString(bytes),
+                    "requestedExecutionLevel[^>]*level\\s*=\\s*[\"']requireAdministrator", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            } finally { FreeLibrary(h); }
+        }
     }
 }
 '@
@@ -246,6 +275,14 @@ function Get-AppList {
     New-Item -ItemType Directory -Force $IconDir | Out-Null
     $packages = @{}
     Get-AppxPackage | ForEach-Object { $packages[$_.PackageFamilyName] = $_ }
+    # Desktop programs: the file each entry starts, to read its manifest.
+    $targets = @{}
+    try {
+        foreach ($i in (New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder').Items()) {
+            $t = $i.ExtendedProperty('System.Link.TargetParsingPath')
+            if ($t) { $targets[$i.Path] = $t }
+        }
+    } catch { }
     @(Get-StartApps | Where-Object { $HiddenApps -notcontains $_.AppID } | ForEach-Object {
         $id = $_.AppID
         $desktopOnly = $false
@@ -259,6 +296,8 @@ function Get-AppList {
             # kind needs Explorer's window host (D-19).
             $desktopOnly = [bool]$app -and $app.EntryPoint -ne 'Windows.FullTrustApplication'
             if ($app) { $logo = Find-Logo $pkg.InstallLocation $app }
+        } elseif ($targets[$id] -match '\.exe$' -and [WinTV.Apps]::NeedsAdmin($targets[$id])) {
+            $desktopOnly = $true # asks for admin rights (D-42)
         }
         $icon = (Get-IconName $id) + '.png'
         $file = Join-Path $IconDir $icon
@@ -271,7 +310,26 @@ function Get-AppList {
 
 function Open-App([string]$Id) {
     if ($Id -match '!') { return @{ pid = [int][WinTV.Apps]::Activate($Id) } }
-    Start-Process "shell:AppsFolder\$Id"
+    # A program that asks for admin rights would only bring up Windows' "blocked
+    # by your system administrator" box (D-42): say where it opens instead.
+    $item = (New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder').ParseName($Id)
+    $target = if ($item) { $item.ExtendedProperty('System.Link.TargetParsingPath') }
+    if ($target -match '\.exe$' -and [WinTV.Apps]::NeedsAdmin($target)) {
+        throw 'This app needs the admin. Open it from Settings > Admin > Windows desktop.'
+    }
+    # Process.Start, not Start-Process: that one keeps only a translated message.
+    $psi = New-Object Diagnostics.ProcessStartInfo "shell:AppsFolder\$Id"
+    $psi.UseShellExecute = $true
+    try { [void][Diagnostics.Process]::Start($psi) }
+    catch {
+        # The TV account gets no admin prompts (D-42): Windows refuses at once
+        # (1260 blocked by policy; 740 needs elevation; 1223 cancelled; 5 denied).
+        $w = $_.Exception.InnerException
+        if ($w -is [ComponentModel.Win32Exception] -and $w.NativeErrorCode -in 5, 740, 1223, 1260) {
+            throw 'This app needs the admin. Open it from Settings > Admin > Windows desktop.'
+        }
+        throw
+    }
     @{ pid = 0 }
 }
 
