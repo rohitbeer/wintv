@@ -143,6 +143,13 @@ const MOCK_SYSTEM = {
     { ssid: 'Cafe guest', signal: 18, secure: false, connected: false, saved: false, auth: 'open', profile: '' },
     { ssid: 'Office', signal: 60, secure: true, connected: false, saved: false, auth: 'enterprise', profile: '' }] },
   'wifi.connect': { connected: true },
+  'bt.list': { radio: true, devices: [{ address: 'A0:AB:51:12:34:56', name: 'Wireless Controller', kind: 'controller', paired: true, connected: true }] },
+  'bt.scan': { radio: true, devices: [
+    { address: 'A0:AB:51:12:34:56', name: 'Wireless Controller', kind: 'controller', paired: true, connected: true },
+    { address: '38:18:4C:AA:BB:CC', name: 'WH-1000XM4', kind: 'headphones', paired: false, connected: false },
+    { address: '11:22:33:44:55:66', name: '', kind: 'remote', paired: false, connected: false }] },
+  'bt.pair': { radio: true, devices: [] },
+  'bt.forget': { radio: true, devices: [] },
   about: { windows: 'Microsoft Windows 11 Pro', version: '25H2 (build 26200.1234)', device: 'WINTV', uptimeMinutes: 1500,
     lastUpdate: new Date(Date.now() - 2 * 86400000).toISOString(), restartNeeded: false },
 };
@@ -1124,11 +1131,62 @@ function closeGuide() {
   if (next) setTimeout(() => maybeGuide(next), 600);
 }
 
-function controlsRows() {
-  return [
+// Devices: Bluetooth pairing (D-46), then the tips for each kind of device.
+async function controlsRows() {
+  const tips = [
     { kind: 'toggle', label: 'Tips for new devices', on: prefs.tips !== false, run: (on) => savePref('tips', on) },
     ...Object.entries(GUIDES).map(([kind, g]) => ({ kind: 'action', label: g.name, value: 'Show', press: () => openGuide(kind) })),
   ];
+  const r = await api.system('bt.list');
+  if (!r.ok) return tips;
+  if (!r.result.radio) return [{ kind: 'info', label: 'Bluetooth', value: 'Not on this PC' }, ...tips];
+  const paired = (r.result.devices || []).filter((d) => d.paired);
+  return [
+    { kind: 'action', label: 'Add a Bluetooth device', value: '', press: searchBluetooth },
+    ...paired.map((d) => ({ kind: 'action', label: btName(d), value: d.connected ? 'Connected' : BT_KIND[d.kind] || 'Paired', press: () => btMenu(d) })),
+    ...tips,
+  ];
+}
+
+// ------------------------------------------------------------------ Bluetooth (D-46)
+const BT_KIND = { controller: 'Controller', remote: 'Remote', keyboard: 'Keyboard', mouse: 'Mouse', input: 'Input device',
+  headphones: 'Headphones', speaker: 'Speaker', phone: 'Phone', computer: 'Computer', other: 'Device' };
+const btName = (d) => d.name || `${BT_KIND[d.kind] || 'Device'} ${d.address.slice(-5)}`;
+
+async function searchBluetooth() {
+  openSheet('Looking for Bluetooth devices…', [{ label: 'Cancel', run: closeSheet }]);
+  const mine = sheet;
+  const r = await api.system('bt.scan');
+  if (sheet !== mine) return; // cancelled meanwhile
+  if (!r.ok) { closeSheet(); toast(r.error || 'Couldn’t search'); return; }
+  const fresh = (r.result.devices || []).filter((d) => !d.paired);
+  openSheet(fresh.length ? 'Pick the device' : 'Nothing found: is it in pairing mode?', [
+    ...fresh.map((d) => ({ label: `${btName(d)}  ·  ${(BT_KIND[d.kind] || 'Device').toLowerCase()}`, run: () => pairBluetooth(d) })),
+    { label: 'Search again', run: searchBluetooth },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+async function pairBluetooth(d) {
+  openSheet(`Pairing ${btName(d)}…`, [{ label: 'Hide', run: closeSheet }]);
+  const r = await api.system('bt.pair', { address: d.address });
+  closeSheet();
+  toast(r.ok ? `${btName(d)} is paired` : r.error || 'Didn’t pair');
+  if (settings) refreshSection();
+}
+
+function btMenu(d) {
+  openSheet(btName(d), [
+    { label: 'Forget this device', run: () => {
+      closeSheet();
+      confirmSheet(`Forget ${btName(d)}? It can be paired again.`, 'Forget', async () => {
+        const r = await api.system('bt.forget', { address: d.address });
+        toast(r.ok ? `${btName(d)} is forgotten` : r.error);
+        if (settings) refreshSection();
+      });
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
 }
 
 // ------------------------------------------------------------------ profile menu
@@ -1598,7 +1656,7 @@ const SECTIONS = [
   { id: 'sound', name: 'Sound', glyph: 'sound' },
   { id: 'saver', name: 'Screen Saver', glyph: 'moon' },
   { id: 'access', name: 'Accessibility', glyph: 'access' },
-  { id: 'controls', name: 'Controls', glyph: 'gamepad' },
+  { id: 'controls', name: 'Devices', glyph: 'gamepad' },
   { id: 'network', name: 'Network', glyph: 'globe' },
   { id: 'updates', name: 'Updates', glyph: 'update' },
   { id: 'admin', name: 'Admin', glyph: 'lock' },
@@ -1615,8 +1673,8 @@ const NOTES = {
     + 'Turning off the screen and sleep apply while the PC is plugged in.',
   access: () => 'Text size and high contrast change WinTV’s own screens, over every app too. '
     + 'Reduce motion also asks apps and websites to keep still.',
-  controls: () => 'The first time you use a keyboard, a remote, a controller or a mouse, WinTV shows how to get around with it. '
-    + 'Turn the tips off here, or show any of them again.',
+  controls: () => 'Bluetooth: to pair a PS5 controller, hold PS and Create until its light flashes; headphones and remotes have a pairing button. '
+    + 'The first time you use a keyboard, a remote, a controller or a mouse, WinTV shows how to get around with it.',
   updates: () => 'Windows installs its updates by itself too; “Install now” only does it sooner. '
     + 'WinTV updates are checked every day, and switch in when no app is open.',
   admin: () => (adminOpen

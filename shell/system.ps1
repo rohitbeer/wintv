@@ -10,6 +10,9 @@
 #   {"id":15,"op":"wifi.scan"}                     networks near by; status none | consent | ok (D-44)
 #   {"id":16,"op":"wifi.allow"}                    this account's location consent, then wifi.scan
 #   {"id":17,"op":"wifi.connect","ssid":"Home","key":"...","auth":"wpa2","hidden":false,"profile":""}
+#   {"id":18,"op":"bt.list"}                       paired Bluetooth devices; radio false = none (D-46)
+#   {"id":19,"op":"bt.scan"}                       ... and every device in range (about 10 s)
+#   {"id":20,"op":"bt.pair","address":"A0:AB:51:12:34:56"}   or bt.forget
 #   {"id":9,"op":"power.get"}                      screen-off and sleep timeouts (plugged in), minutes
 #   {"id":10,"op":"power.set","screenOff":30}      or {"sleep":60}; 0 = never
 #   {"id":11,"op":"motion.set","reduce":true}      Windows' animation effects off (apps keep still)
@@ -493,6 +496,162 @@ function Get-WifiNetworks {
     @{ status = 'ok'; networks = @($list | ForEach-Object { @{ ssid = $_.Ssid; signal = $_.Signal; secure = $_.Secure; connected = $_.Connected; saved = $_.Saved; auth = $_.Auth; profile = $_.Profile } }) }
 }
 
+# Bluetooth from the TV (D-46): Windows' classic Bluetooth API (bthprops),
+# which pairs controllers and headphones. WinTV answers the pairing itself:
+# confirm for "just works" and number comparison, "0000" for old devices.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+namespace WinTV {
+    public class BtDevice { public string Address, Name, Kind; public bool Paired, Connected; }
+
+    public static class Bluetooth {
+        [StructLayout(LayoutKind.Sequential)] struct FIND_RADIO { public int dwSize; }
+        [StructLayout(LayoutKind.Sequential)] struct SEARCH {
+            public int dwSize, fReturnAuthenticated, fReturnRemembered, fReturnUnknown, fReturnConnected, fIssueInquiry;
+            public byte cTimeoutMultiplier; public IntPtr hRadio;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct SYSTEMTIME { public ushort a, b, c, d, e, f, g, h; }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct DEVICE_INFO {
+            public int dwSize; public ulong Address; public uint ClassOfDevice; public int Connected, Remembered, Authenticated;
+            public SYSTEMTIME LastSeen, LastUsed;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 248)] public string Name;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct AUTH_PARAMS { public DEVICE_INFO Device; public int Method, IoCapability, Requirements; public uint NumericValue; }
+        [StructLayout(LayoutKind.Sequential)] struct AUTH_RESPONSE {
+            public ulong Address; public int Method;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public byte[] Info;
+            public byte Negative;
+        }
+        delegate bool AuthCallback(IntPtr param, IntPtr authParams);
+
+        [DllImport("bthprops.cpl", SetLastError = true)] static extern IntPtr BluetoothFindFirstRadio(ref FIND_RADIO p, out IntPtr radio);
+        [DllImport("bthprops.cpl")] static extern bool BluetoothFindRadioClose(IntPtr find);
+        [DllImport("bthprops.cpl", SetLastError = true)] static extern IntPtr BluetoothFindFirstDevice(ref SEARCH p, ref DEVICE_INFO info);
+        [DllImport("bthprops.cpl", SetLastError = true)] static extern bool BluetoothFindNextDevice(IntPtr find, ref DEVICE_INFO info);
+        [DllImport("bthprops.cpl")] static extern bool BluetoothFindDeviceClose(IntPtr find);
+        [DllImport("bthprops.cpl")] static extern int BluetoothGetDeviceInfo(IntPtr radio, ref DEVICE_INFO info);
+        [DllImport("bthprops.cpl")] static extern int BluetoothAuthenticateDeviceEx(IntPtr hwnd, IntPtr radio, ref DEVICE_INFO info, IntPtr oob, int requirements);
+        [DllImport("bthprops.cpl")] static extern int BluetoothRegisterForAuthenticationEx(ref DEVICE_INFO info, out IntPtr registration, AuthCallback callback, IntPtr param);
+        [DllImport("bthprops.cpl")] static extern bool BluetoothUnregisterAuthentication(IntPtr registration);
+        [DllImport("bthprops.cpl")] static extern int BluetoothSendAuthenticationResponseEx(IntPtr radio, ref AUTH_RESPONSE response);
+        [DllImport("bthprops.cpl")] static extern int BluetoothSetServiceState(IntPtr radio, ref DEVICE_INFO info, ref Guid service, int flags);
+        [DllImport("bthprops.cpl")] static extern int BluetoothRemoveDevice(ref ulong address);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+        public const int NoRadio = -1;
+        static AuthCallback answer;   // kept referenced while Windows may call it
+
+        static IntPtr Radio() {
+            var p = new FIND_RADIO { dwSize = Marshal.SizeOf(typeof(FIND_RADIO)) };
+            IntPtr radio;
+            IntPtr find = BluetoothFindFirstRadio(ref p, out radio);
+            if (find == IntPtr.Zero) return IntPtr.Zero;
+            BluetoothFindRadioClose(find);
+            return radio;
+        }
+
+        public static string Format(ulong a) {
+            var parts = new string[6];
+            for (int i = 0; i < 6; i++) parts[i] = ((a >> (8 * (5 - i))) & 0xFF).ToString("X2");
+            return string.Join(":", parts);
+        }
+
+        public static ulong Parse(string s) { return Convert.ToUInt64(s.Replace(":", ""), 16); }
+
+        // What it is, from its Class of Device: what WinTV shows next to the name.
+        static string Kind(uint cod) {
+            uint major = (cod >> 8) & 0x1F, minor = (cod >> 2) & 0x3F;
+            if (major == 5) {
+                if ((minor & 0x0F) == 2 || (minor & 0x0F) == 1) return "controller";
+                if ((minor & 0x0F) == 3) return "remote";
+                if ((minor & 0x10) != 0) return "keyboard";
+                if ((minor & 0x20) != 0) return "mouse";
+                return "input";
+            }
+            if (major == 4) return minor == 5 || minor == 10 ? "speaker" : "headphones";
+            if (major == 2) return "phone";
+            if (major == 1) return "computer";
+            return "other";
+        }
+
+        // NoRadio, or 0 and the devices: paired ones, and with search, all in range (about 10 s).
+        public static int List(bool search, out List<BtDevice> found) {
+            found = new List<BtDevice>();
+            IntPtr radio = Radio();
+            if (radio == IntPtr.Zero) return NoRadio;
+            try {
+                var s = new SEARCH {
+                    dwSize = Marshal.SizeOf(typeof(SEARCH)), fReturnAuthenticated = 1, fReturnRemembered = 1, fReturnConnected = 1,
+                    fReturnUnknown = search ? 1 : 0, fIssueInquiry = search ? 1 : 0, cTimeoutMultiplier = (byte)(search ? 8 : 0), hRadio = radio,
+                };
+                var d = new DEVICE_INFO { dwSize = Marshal.SizeOf(typeof(DEVICE_INFO)) };
+                IntPtr f = BluetoothFindFirstDevice(ref s, ref d);
+                if (f == IntPtr.Zero) return 0;
+                try {
+                    do {
+                        found.Add(new BtDevice {
+                            Address = Format(d.Address), Name = string.IsNullOrEmpty(d.Name) ? "" : d.Name, Kind = Kind(d.ClassOfDevice),
+                            Paired = d.Authenticated != 0 || d.Remembered != 0, Connected = d.Connected != 0,
+                        });
+                        d = new DEVICE_INFO { dwSize = Marshal.SizeOf(typeof(DEVICE_INFO)) };
+                    } while (BluetoothFindNextDevice(f, ref d));
+                } finally { BluetoothFindDeviceClose(f); }
+                return 0;
+            } finally { CloseHandle(radio); }
+        }
+
+        // "" when paired (and its services on), else what went wrong.
+        public static string Pair(string address) {
+            IntPtr radio = Radio();
+            if (radio == IntPtr.Zero) return "This PC has no Bluetooth";
+            IntPtr reg = IntPtr.Zero;
+            try {
+                var d = new DEVICE_INFO { dwSize = Marshal.SizeOf(typeof(DEVICE_INFO)), Address = Parse(address) };
+                int e = BluetoothGetDeviceInfo(radio, ref d);
+                if (e != 0) return "Not found any more: search again";
+                if (d.Authenticated == 0) {
+                    answer = (param, p) => {
+                        var ap = (AUTH_PARAMS)Marshal.PtrToStructure(p, typeof(AUTH_PARAMS));
+                        var r = new AUTH_RESPONSE { Address = ap.Device.Address, Method = ap.Method, Info = new byte[32] };
+                        if (ap.Method == 1) { for (int i = 0; i < 4; i++) r.Info[i] = (byte)'0'; r.Info[16] = 4; }   // legacy PIN 0000
+                        else BitConverter.GetBytes(ap.NumericValue).CopyTo(r.Info, 0);                                // confirm what it shows
+                        BluetoothSendAuthenticationResponseEx(radio, ref r);
+                        return true;
+                    };
+                    BluetoothRegisterForAuthenticationEx(ref d, out reg, answer, IntPtr.Zero);
+                    e = BluetoothAuthenticateDeviceEx(IntPtr.Zero, radio, ref d, IntPtr.Zero, 0x2 /* no MITM protection, bonding */);
+                    if (e == 5) return "Windows didn't let the TV account pair it: pair it once on the Windows desktop (Settings > Admin)";
+                    if (e != 0 && e != 0xB7 /* already exists */) return "Didn't pair (error " + e + "): put it in pairing mode and try again";
+                }
+                // What it is for: game controllers and remotes are HID, headphones audio.
+                foreach (string uuid in new[] { "00001124", "0000110B", "0000110E", "0000111E" }) {
+                    var g = new Guid(uuid + "-0000-1000-8000-00805F9B34FB");
+                    BluetoothSetServiceState(radio, ref d, ref g, 1);   // a service it doesn't have is refused; fine
+                }
+                return "";
+            } finally {
+                if (reg != IntPtr.Zero) BluetoothUnregisterAuthentication(reg);
+                CloseHandle(radio);
+            }
+        }
+
+        public static string Forget(string address) {
+            ulong a = Parse(address);
+            int e = BluetoothRemoveDevice(ref a);
+            return e == 0 || e == 1168 /* not found */ ? "" : "Windows didn't forget it (error " + e + ")";
+        }
+    }
+}
+'@
+
+function Get-BtDevices([bool]$Search) {
+    $list = $null
+    if ([WinTV.Bluetooth]::List($Search, [ref]$list) -eq [WinTV.Bluetooth]::NoRadio) { return @{ radio = $false } }
+    @{ radio = $true; devices = @($list | ForEach-Object { @{ address = $_.Address; name = $_.Name; kind = $_.Kind; paired = $_.Paired; connected = $_.Connected } }) }
+}
+
 $IconDir = Join-Path $env:LOCALAPPDATA 'WinTV\cache\icons'
 # Not on a TV: Explorer itself and what it hosts (its desktop would come
 # back): the Run box, Control Panel and the Windows Tools folder; Edge;
@@ -714,6 +873,10 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             }
             'network.get' { @{ connections = @(Get-NetworkInfo); wifi = [WinTV.Wifi]::HasAdapter() } }
             'wifi.scan'   { Get-WifiNetworks }
+            'bt.list'     { Get-BtDevices $false }
+            'bt.scan'     { Get-BtDevices $true }
+            'bt.pair'     { $e = [WinTV.Bluetooth]::Pair([string]$req.address); if ($e) { throw $e }; Get-BtDevices $false }
+            'bt.forget'   { $e = [WinTV.Bluetooth]::Forget([string]$req.address); if ($e) { throw $e }; Get-BtDevices $false }
             'wifi.allow'  { Set-WifiConsent; Get-WifiNetworks }
             'wifi.connect' {
                 # $null would reach C# as "" (PowerShell's rule): no key = use the saved network.

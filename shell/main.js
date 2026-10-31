@@ -344,6 +344,11 @@ const SYSTEM_OPS = {
   },
   'audio.key': (a) => { if (!['up', 'down', 'mute'].includes(a.key)) throw new Error('bad argument'); return { key: a.key }; },
   'network.get': () => ({}),
+  // Bluetooth (D-46): an address as Windows writes it.
+  'bt.list': () => ({}),
+  'bt.scan': () => ({}),
+  'bt.pair': (a) => ({ address: btAddress(a.address) }),
+  'bt.forget': (a) => ({ address: btAddress(a.address) }),
   // Wi-Fi (D-44): the helper checks again what Windows accepts.
   'wifi.scan': () => ({}),
   'wifi.allow': () => ({}),
@@ -397,8 +402,14 @@ function startHelper() {
   });
 }
 
-// Joining a network waits for Windows to connect (up to 25 s).
-const SLOW_OPS = { 'wifi.connect': 45000 };
+// Joining a network waits for Windows to connect (up to 25 s); a Bluetooth
+// search takes about 10 s, pairing as long as the device needs.
+const SLOW_OPS = { 'wifi.connect': 45000, 'bt.scan': 30000, 'bt.pair': 60000 };
+
+function btAddress(v) {
+  if (typeof v !== 'string' || !/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/i.test(v)) throw new Error('bad argument');
+  return v.toUpperCase();
+}
 
 async function system(op, args, timeoutMs = SLOW_OPS[op] || 20000) {
   const check = SYSTEM_OPS[op];
