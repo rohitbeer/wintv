@@ -119,6 +119,7 @@ Invoke-Step 'power and boot: quiet, straight to the TV' {
 }
 
 Invoke-Step 'update tasks (Windows and WinTV)' { Register-UpdateTasks }
+Invoke-Step 'admin broker task (Settings > Admin)' { Register-AdminTask }
 
 Invoke-Step 'boot task + SetupComplete' {
     Invoke-Native "$env:SystemRoot\System32\schtasks.exe" @('/Create', '/F', '/TN', 'WinTV\Maintain', '/RU', 'SYSTEM',

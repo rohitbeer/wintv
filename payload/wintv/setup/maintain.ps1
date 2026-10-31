@@ -8,6 +8,9 @@ Invoke-Step 'autologon' { Set-AutoLogon }
 if ((Test-Path $EdgeRemovedMark) -and (Test-Path $EdgeExe)) {
     Invoke-Step 'Edge came back: removing it again' { Remove-Edge }
 }
+# Updates bring new setup scripts but don't register tasks; a task a newer
+# release needs comes here, at the next boot (D-39).
+Invoke-Step 'admin broker task' { Register-AdminTask }
 # The TV's shell must point at an installed version (D-28).
 Invoke-Step 'TV shell points at the installed version' {
     $v = (Get-Content "$env:ProgramFiles\WinTV\current.json" -Raw | ConvertFrom-Json).version

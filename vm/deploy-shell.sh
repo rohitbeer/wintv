@@ -36,6 +36,7 @@ Get-ChildItem $pf | Where-Object { $_.Name -notin 'versions', 'current.json' } |
 [IO.File]::WriteAllText("$pf\current.json", (@{ version = $v; bad = @() } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 . C:\ProgramData\WinTV\payload\setup\common.ps1
 Register-UpdateTasks
+Register-AdminTask
 Set-TvShell $v
 Remove-Item C:\Users\tv\AppData\Roaming\WinTV\shell.log -ErrorAction SilentlyContinue
 "installed $v"

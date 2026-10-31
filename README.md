@@ -5,8 +5,9 @@ stick, and it boots straight to a "Who's watching?" screen, then an
 Apple-TV-style home screen. It has no Microsoft bloat and no Edge, and uses
 Brave as the browser. WinTV's own shell replaces every Windows screen the TV
 account would see. Over every app it adds quick settings, an
-on-screen keyboard and the volume. The Windows desktop exists only in a
-hidden repair mode for the admin.
+on-screen keyboard and the volume. Changes to the PC itself (device name,
+the Windows desktop for repairs) sit in Settings > Admin, behind the admin
+password.
 
 ## Layout
 
@@ -91,13 +92,13 @@ release `vX.Y.Z`).
 | a text field gets the focus | the on-screen keyboard comes up (arrows + OK to type, Back to hide) |
 | Power tile | sleep, restart, shut down, switch profile |
 | any button on the clock screen | wake the TV (after a long break it asks "Who's watching?") |
-| Settings > About, OK seven times on "WinTV" | Repair mode: Windows' sign-in for the admin, then the desktop |
+| Settings > Admin, then the admin password | the device name, disk encryption, and Windows desktop (Windows' sign-in for the admin, then the desktop) |
 
 ## After installing
 
 Edge's uninstaller only accepts Settings, not a script. Once, as
-admin: Settings > About > Repair mode (press OK seven times on "WinTV" to
-show it), sign in as admin, then **Settings > Apps > Installed apps >
+admin: Settings > Admin, unlock with the admin password, Windows desktop,
+sign in as admin, then **Settings > Apps > Installed apps >
 Microsoft Edge > Uninstall**. Then sign out and choose **TV**.
 
 ## License

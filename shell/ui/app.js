@@ -15,6 +15,7 @@ const GLYPHS = {
   power: '<path d="M12 3.6v7.6"/><path d="M7.1 6.3a7.6 7.6 0 1 0 9.8 0"/>',
   sound: '<path d="M4.5 9.5h3l4.5-3.8v12.6l-4.5-3.8h-3z" stroke-linejoin="round"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2.2"/><path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5"/>',
   update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
   moon: '<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" stroke-linejoin="round"/>',
   apps: '<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
@@ -59,6 +60,13 @@ const api = window.wintv || {
     { id: 'g', name: 'Registry Editor', tool: true, icon: null }, { id: 'h', name: 'Microsoft Store', desktopOnly: true, icon: null }] }),
   device: async () => ({ ok: true }),
   pointer: async () => ({ ok: true }),
+  admin: async (op, a) => {
+    if (op === 'status') return { ok: true, result: { admin: 'admin', lockedMinutes: 0 } };
+    if (op === 'unlock') return a.password === 'admin' ? { ok: true, result: {} } : { ok: false, error: 'That isn\'t the admin password' };
+    if (op === 'encryption.get') return { ok: true, result: { state: 'off', percent: 0 } };
+    if (op === 'device.rename') return { ok: true, result: { name: 'WINTV', pending: a.name } };
+    return { ok: true, result: { name: 'WINTV', pending: null } };
+  },
   onDevice: () => {},
   setProfile: async () => ({ ok: true }),
   setPref: async (key, value) => ({ ok: true, result: { ...prefs, [key]: value } }),
@@ -325,7 +333,7 @@ function openSheet(title, items, start = 0) {
     const b = document.createElement(it.input ? 'input' : 'button');
     b.className = it.input ? 'choice search' : 'choice';
     b.tabIndex = -1;
-    if (it.input) Object.assign(b, { type: 'text', placeholder: it.label, value: it.value || '', spellcheck: false, autocomplete: 'off' });
+    if (it.input) Object.assign(b, { type: it.password ? 'password' : 'text', placeholder: it.label, value: it.value || '', spellcheck: false, autocomplete: 'off' });
     else b.textContent = it.label;
     b.addEventListener('mousemove', () => focusSheet(i, true));
     b.addEventListener('click', () => { focusSheet(i, true); it.run(); });
@@ -1126,6 +1134,7 @@ const SECTIONS = [
   { id: 'controls', name: 'Controls', glyph: 'gamepad' },
   { id: 'network', name: 'Network', glyph: 'globe' },
   { id: 'updates', name: 'Updates', glyph: 'update' },
+  { id: 'admin', name: 'Admin', glyph: 'lock' },
   { id: 'about', name: 'About', glyph: 'info' },
 ];
 const KEEP_SECONDS = 15;
@@ -1143,8 +1152,10 @@ const NOTES = {
     + 'Turn the tips off here, or show any of them again.',
   updates: () => 'Windows installs its updates by itself too; “Install now” only does it sooner. '
     + 'WinTV updates are checked every day, and switch in when no app is open.',
-  about: () => (repair.open ? 'Repair mode opens Windows’ sign-in screen. The admin signs in with the admin password '
-    + 'and gets the Windows desktop. Signing out there brings the TV back.' : ''),
+  admin: () => (adminOpen
+    ? 'Unlocked until you leave Settings, or for 10 minutes without a change. Windows desktop opens Windows’ sign-in screen '
+      + 'for the admin, for repairs WinTV’s own screens can’t do yet; signing out there brings the TV back.'
+    : 'Changes to the PC itself, for whoever knows the admin password. Windows checks the password; WinTV doesn’t keep it.'),
 };
 
 function openSettings() {
@@ -1158,7 +1169,7 @@ function openSettings() {
 function closeSettings() {
   clearInterval(updatesPoll);
   settings = null;
-  repair = { taps: 0, open: false };
+  if (adminOpen) { adminOpen = false; api.admin('lock'); }
   $('settings').classList.add('hidden');
   setFocus(pos.row, pos.col, true);
 }
@@ -1294,6 +1305,7 @@ async function sectionRows(id) {
   if (id === 'controls') return controlsRows();
   if (id === 'network') return networkRows(result(await api.system('network.get')));
   if (id === 'updates') return updateRows(result(await api.updates('get')));
+  if (id === 'admin') return adminRows();
   return aboutRows(result(await api.system('about')));
 }
 
@@ -1470,37 +1482,92 @@ function networkRows({ connections }) {
   ]);
 }
 
-// Repair mode: the Windows desktop, for the admin, when something needs
-// fixing that WinTV's own screens can't. Hidden the way Android hides its
-// developer options: press OK on "WinTV" in About seven times (D-22).
-let repair = { taps: 0, open: false };
-const REPAIR_TAPS = 7;
+// Admin (D-39): jobs on the PC itself, behind the admin password. A SYSTEM
+// helper does them; main.js keeps the key it hands out, so this screen only
+// knows whether the section is unlocked. The Windows desktop (the repair
+// mode of D-22) is here too, now that something locks it.
+let adminOpen = false;
+const ENCRYPTION = {
+  off: 'Off', on: 'On', suspended: 'Paused', unavailable: 'Not in this Windows edition', other: 'Unknown',
+  encrypting: (e) => `Encrypting · ${e.percent}%`, decrypting: (e) => `Decrypting · ${e.percent}%`,
+};
 
-function repairTap() {
-  if (repair.open) return;
-  repair.taps += 1;
-  if (repair.taps >= REPAIR_TAPS) {
-    repair.open = true;
-    toast('Repair mode is now at the bottom of About');
-    loadSection();
-  } else if (repair.taps >= 4) {
-    toast(`${REPAIR_TAPS - repair.taps} more for repair mode`);
+async function adminRows() {
+  if (!adminOpen) {
+    const s = result(await api.admin('status'));
+    return [{ kind: 'action', label: 'Unlock', value: s.lockedMinutes ? `Wait ${s.lockedMinutes} min` : 'Admin password', press: askAdminPassword }];
   }
+  const [dev, enc] = await Promise.all([api.admin('device.get'), api.admin('encryption.get')]);
+  if (dev.locked || enc.locked) { adminOpen = false; return adminRows(); }
+  const d = result(dev);
+  const e = result(enc);
+  const crypt = ENCRYPTION[e.state] ?? e.state;
+  return [
+    { kind: 'action', label: 'Device name', value: d.pending ? `${d.pending} after a restart` : d.name, press: () => renameDevice(d) },
+    { kind: 'info', label: 'Disk encryption', value: typeof crypt === 'function' ? crypt(e) : crypt },
+    { kind: 'choice', label: 'Windows desktop', value: 'For repairs', options: [
+      { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] },
+    { kind: 'action', label: 'Lock', value: '', press: lockAdmin },
+  ];
+}
+
+function askAdminPassword() {
+  openSheet('Admin password', [
+    { input: true, password: true, label: 'Password', run: async () => {
+      const field = sheet?.buttons[0];
+      const password = field?.value || '';
+      if (!password) return;
+      field.value = '';
+      closeSheet();
+      const r = await api.admin('unlock', { password });
+      if (!r.ok) { toast(r.error || 'Couldn’t unlock'); if (settings) refreshSection(); return; }
+      adminOpen = true;
+      if (settings) loadSection();
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+function relocked(r) {
+  if (!r.locked) return false;
+  adminOpen = false;
+  toast('Admin locked itself again');
+  if (settings) loadSection();
+  return true;
+}
+
+function renameDevice(d) {
+  const now = d.pending || d.name;
+  openSheet('Device name', [
+    { input: true, label: 'Name', value: now, run: async () => {
+      const name = sheet?.buttons[0]?.value.trim() || '';
+      closeSheet();
+      if (!name || name.toUpperCase() === now.toUpperCase()) return; // Windows keeps PC names in capitals
+      const r = await api.admin('device.rename', { name });
+      if (relocked(r)) return;
+      if (!r.ok) toast(r.error);
+      else toast(r.result.pending ? `The TV is called ${r.result.pending} after its next restart` : `The TV keeps the name ${r.result.name}`);
+      refreshSection();
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+async function lockAdmin() {
+  adminOpen = false;
+  await api.admin('lock');
+  loadSection();
 }
 
 function aboutRows(a) {
   const hours = Math.floor(a.uptimeMinutes / 60);
   const rows = [
-    { kind: 'info', label: 'WinTV', value: appVersion, press: repairTap },
+    { kind: 'info', label: 'WinTV', value: appVersion },
     { kind: 'info', label: 'Windows', value: `${a.windows.replace(/^Microsoft /, '')} ${a.version}` },
     { kind: 'info', label: 'Device name', value: a.device },
     { kind: 'info', label: 'Last update', value: a.lastUpdate ? new Date(a.lastUpdate).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' }) : 'Not yet' },
     { kind: 'info', label: 'On for', value: hours >= 24 ? `${Math.floor(hours / 24)} d ${hours % 24} h` : `${hours} h ${a.uptimeMinutes % 60} min` },
   ];
-  if (repair.open) {
-    rows.push({ kind: 'choice', label: 'Repair mode', value: 'Windows desktop', options: [
-      { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] });
-  }
   return rows;
 }
 

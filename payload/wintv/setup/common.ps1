@@ -134,6 +134,13 @@ function Register-UpdateTasks {
         -Description 'WinTV: install a newer signed WinTV release, or roll back one that does not start.' -UsersMayStart
 }
 
+# Settings > Admin's broker (D-39): the TV account may start it, not change
+# it, and it takes no arguments. It ends by itself after 10 idle minutes.
+function Register-AdminTask {
+    Register-WinTVTask -Name 'AdminBroker' -Script 'admin.ps1' `
+        -Description 'WinTV: the jobs of Settings > Admin, behind the admin password. Stops after 10 idle minutes.' -UsersMayStart
+}
+
 # The tv account's Shell value names the supervisor of the version in
 # current.json, so the next sign-in starts it. If that file were missing,
 # Windows would quietly start Explorer instead: the Windows desktop on the TV.

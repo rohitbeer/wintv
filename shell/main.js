@@ -19,6 +19,7 @@ const { spawn, execFile } = require('node:child_process');
 const { Readable } = require('node:stream');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 const os = require('node:os');
 const art = require('./art');
@@ -935,12 +936,19 @@ function layerIpc() {
   ipcMain.handle('layer:type', fromLayer((text) => {
     // One key's worth (".com" is the longest), printable characters only.
     if (typeof text !== 'string' || !text.length || text.length > 8 || /[\u0000-\u001f\u007f]/.test(text)) return { ok: false, error: 'bad argument' };
-    inputSend({ op: 'type', text });
+    // Into WinTV's own window directly: through Windows' input, every keyboard
+    // hook in the session would see it, the admin password too (D-39).
+    if (win?.isFocused()) win.webContents.insertText(text);
+    else inputSend({ op: 'type', text });
     return { ok: true };
   }));
   ipcMain.handle('layer:key', fromLayer((name) => {
     if (!KEYBOARD_KEYS.includes(name)) return { ok: false, error: 'bad argument' };
-    inputSend({ op: 'key', key: name });
+    if (win?.isFocused()) {
+      const keyCode = { backspace: 'Backspace', enter: 'Enter', left: 'Left', right: 'Right', tab: 'Tab' }[name];
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode });
+    } else inputSend({ op: 'key', key: name });
     return { ok: true };
   }));
   ipcMain.handle('layer:action', fromLayer(async (name, arg) => {
@@ -948,6 +956,100 @@ function layerIpc() {
     if (!fn) return { ok: false, error: 'Unknown action' };
     try { return { ok: true, result: await fn(arg) }; } catch (e) { return { ok: false, error: e.message }; }
   }));
+}
+
+// ---------------------------------------------------------------- admin (D-39)
+// Settings > Admin: jobs on the PC itself, behind the admin password, done
+// by a SYSTEM broker (payload setup/admin.ps1) this account may only start.
+// The broker checks everything itself; these checks only give quick errors.
+// The key it hands out for the password stays in this process: the home
+// screen only learns that the section is unlocked.
+const PC_NAME = /^(?![0-9]+$)(?!-)[A-Za-z0-9-]{1,15}(?<!-)$/;
+const ADMIN_JOBS = {
+  status: () => ({}),
+  unlock: (a) => {
+    if (typeof a.password !== 'string' || !a.password.length || a.password.length > 256) throw new Error('Type the admin password');
+    return { password: a.password };
+  },
+  lock: () => ({}),
+  'device.get': () => ({}),
+  'device.rename': (a) => {
+    if (typeof a.name !== 'string' || !PC_NAME.test(a.name)) throw new Error('Use up to 15 letters, digits and hyphens');
+    return { name: a.name };
+  },
+  'encryption.get': () => ({}),
+};
+// Written by the broker; only SYSTEM and admins can write it (D-39).
+const BROKER_FILE = path.join(SYSTEM_DIR, 'state', 'admin-broker.json');
+let adminKey = null;
+
+function brokerInfo() {
+  const b = readJson(BROKER_FILE);
+  return typeof b?.pipe === 'string' && /^WinTV\.Admin\.[0-9a-f]{32}$/.test(b.pipe) ? b : null;
+}
+
+// One request, one answer. `down`: nobody is listening on that pipe.
+function brokerAsk(pipe, req, timeoutMs = 20000) {
+  return new Promise((done) => {
+    let buf = '';
+    let over = false;
+    const sock = net.connect(`\\\\.\\pipe\\${pipe}`);
+    const end = (r) => { if (over) return; over = true; clearTimeout(timer); sock.destroy(); done(r); };
+    const timer = setTimeout(() => end({ ok: false, error: 'The admin helper didn’t answer' }), timeoutMs);
+    sock.setEncoding('utf8');
+    sock.on('connect', () => sock.write(JSON.stringify(req) + '\n'));
+    sock.on('data', (d) => {
+      buf += d;
+      const nl = buf.indexOf('\n');
+      if (nl < 0) { if (buf.length > 65536) end({ ok: false, error: 'bad answer' }); return; }
+      try { end(JSON.parse(buf.slice(0, nl))); } catch { end({ ok: false, error: 'bad answer' }); }
+    });
+    sock.on('error', (e) => end({ ok: false, error: e.message, down: e.code === 'ENOENT' }));
+    sock.on('close', () => end({ ok: false, error: 'The admin helper didn’t answer' }));
+  });
+}
+
+// Starts the broker and waits for its new pipe (PowerShell and its compiler
+// take a few seconds).
+async function startBroker() {
+  const before = brokerInfo()?.pipe;
+  const { err } = await quiet('schtasks.exe', ['/Run', '/TN', '\\WinTV\\AdminBroker']);
+  if (err) return null; // not registered yet: an updated TV gets it at its next restart
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    const b = brokerInfo();
+    if (b && b.pipe !== before) return b;
+  }
+  return null;
+}
+
+async function admin(op, args) {
+  const check = ADMIN_JOBS[op];
+  if (!check) return { ok: false, error: 'Unknown job' };
+  let clean;
+  try { clean = check(args || {}); } catch (e) { return { ok: false, error: e.message }; }
+  if (!IS_WIN) return { ok: false, error: 'Admin needs Windows' };
+  const req = { op, ...clean };
+  if (op !== 'status' && op !== 'unlock') {
+    if (!adminKey) return { ok: false, error: 'Locked', locked: true };
+    req.key = adminKey;
+  }
+  const b = brokerInfo();
+  let r = b ? await brokerAsk(b.pipe, req) : { down: true };
+  if (r.down) {
+    // It stops after 10 idle minutes, and the key goes with it.
+    if (req.key) { adminKey = null; return { ok: false, error: 'Locked', locked: true }; }
+    const fresh = await startBroker();
+    if (!fresh) return { ok: false, error: 'Admin isn’t set up on this TV yet: restart it once' };
+    r = await brokerAsk(fresh.pipe, req);
+  }
+  if (r.locked || op === 'lock') adminKey = null;
+  if (op === 'unlock' && r.ok) {
+    adminKey = typeof r.result?.key === 'string' ? r.result.key : null;
+    log('admin: unlocked');
+    return { ok: true, result: {} };
+  }
+  return { ok: !!r.ok, result: r.result, error: r.error, locked: r.locked, lockedMinutes: r.lockedMinutes };
 }
 
 // ---------------------------------------------------------------- updates
@@ -1257,6 +1359,7 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:power', fromHome((action) => power(String(action))));
     ipcMain.handle('wintv:profile', fromHome((id) => setProfile(String(id))));
     ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
+    ipcMain.handle('wintv:admin', fromHome((op, args) => admin(String(op), args && typeof args === 'object' ? args : {})));
     ipcMain.handle('wintv:updates', fromHome((action, arg) => updates(String(action), arg)));
     ipcMain.handle('wintv:pref', fromHome((key, value) => setPref(String(key), value)));
     ipcMain.handle('wintv:weather', fromHome(() => weatherNow()));
