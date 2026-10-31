@@ -4,7 +4,7 @@
 #   {"id":1,"op":"display.get"}                    current picture mode + the modes the TV offers
 #   {"id":2,"op":"display.set","width":1920,"height":1080,"hz":60}
 #   {"id":3,"op":"audio.get"}                      output device, volume 0-100, muted
-#   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}
+#   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}, or {"output":"<endpoint id>"} (D-43)
 #   {"id":7,"op":"audio.key","key":"up"}           the remote's volume keys: up | down | mute
 #   {"id":5,"op":"network.get"}                    connections and their addresses
 #   {"id":9,"op":"power.get"}                      screen-off and sleep timeouts (plugged in), minutes
@@ -104,11 +104,36 @@ namespace WinTV {
     }
     [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IMMDeviceEnumerator {
-        [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
+        [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
         [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
     }
     [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
     class MMDeviceEnumerator { }
+    [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceCollection {
+        [PreserveSig] int GetCount(out int count);
+        [PreserveSig] int Item(int index, out IMMDevice device);
+    }
+    // The default-output switch the Sound control panel itself uses: not in
+    // the SDK, unchanged since Windows 7. Only SetDefaultEndpoint is called;
+    // the methods before it hold its place in the table.
+    [ComImport, Guid("f8679f50-850a-41cf-9c72-430f290290c8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPolicyConfig {
+        [PreserveSig] int GetMixFormat([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr format);
+        [PreserveSig] int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, int useDefault, IntPtr format);
+        [PreserveSig] int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id);
+        [PreserveSig] int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr endpointFormat, IntPtr mixFormat);
+        [PreserveSig] int GetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string id, int useDefault, IntPtr defaultPeriod, IntPtr minimumPeriod);
+        [PreserveSig] int SetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr period);
+        [PreserveSig] int GetShareMode([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr mode);
+        [PreserveSig] int SetShareMode([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr mode);
+        [PreserveSig] int GetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr key, IntPtr value);
+        [PreserveSig] int SetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr key, IntPtr value);
+        [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string id, int role);
+        [PreserveSig] int SetEndpointVisibility([MarshalAs(UnmanagedType.LPWStr)] string id, int visible);
+    }
+    [ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")]
+    class PolicyConfigClient { }
 
     public static class Audio {
         const int eRender = 0, eConsole = 0, CLSCTX_ALL = 23;
@@ -142,6 +167,28 @@ namespace WinTV {
         public static void SetMute(bool muted) {
             string id; var ctx = Guid.Empty;
             Marshal.ThrowExceptionForHR(Endpoint(out id).SetMute(muted, ref ctx));
+        }
+
+        // Every output that is plugged in and on (D-43); names: Get-AudioName.
+        public static string[] Outputs() {
+            var devices = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            IMMDeviceCollection all;
+            Marshal.ThrowExceptionForHR(devices.EnumAudioEndpoints(eRender, 1 /* active */, out all));
+            int n;
+            Marshal.ThrowExceptionForHR(all.GetCount(out n));
+            var ids = new List<string>();
+            for (int i = 0; i < n; i++) {
+                IMMDevice d; string id;
+                if (all.Item(i, out d) == 0 && d.GetId(out id) == 0) ids.Add(id);
+            }
+            return ids.ToArray();
+        }
+
+        // Sound for everything from here on: films and games (console,
+        // multimedia) and calls (communications).
+        public static void SetOutput(string id) {
+            var policy = (IPolicyConfig)new PolicyConfigClient();
+            for (int role = 0; role < 3; role++) Marshal.ThrowExceptionForHR(policy.SetDefaultEndpoint(id, role));
         }
     }
 
@@ -358,7 +405,8 @@ function Get-AudioName([string]$DeviceId) {
 
 function Get-AudioInfo {
     try { $a = [WinTV.Audio]::Get() } catch { return @{ present = $false } }
-    @{ present = $true; device = (Get-AudioName $a[0]); volume = $a[1]; muted = [bool]$a[2] }
+    $outputs = @(try { [WinTV.Audio]::Outputs() } catch { }) | ForEach-Object { @{ id = $_; name = (Get-AudioName $_); current = ($_ -eq $a[0]) } }
+    @{ present = $true; device = (Get-AudioName $a[0]); volume = $a[1]; muted = [bool]$a[2]; outputs = @($outputs) }
 }
 
 function Get-NetworkInfo {
@@ -440,6 +488,11 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             'audio.set'   {
                 if ($null -ne $req.volume) { [WinTV.Audio]::SetVolume([int]$req.volume) }
                 if ($null -ne $req.muted) { [WinTV.Audio]::SetMute([bool]$req.muted) }
+                if ($req.output) {
+                    # Only an output that is there now (main.js checked the form).
+                    if (@([WinTV.Audio]::Outputs()) -notcontains [string]$req.output) { throw 'That output isn''t connected any more' }
+                    [WinTV.Audio]::SetOutput([string]$req.output)
+                }
                 Get-AudioInfo
             }
             'audio.key'   {

@@ -333,7 +333,14 @@ const SYSTEM_OPS = {
   'display.get': () => ({}),
   'display.set': (a) => ({ width: int(a.width, 640, 15360), height: int(a.height, 480, 8640), hz: int(a.hz, 20, 1000) }),
   'audio.get': () => ({}),
-  'audio.set': (a) => (a.volume !== undefined ? { volume: int(a.volume, 0, 100) } : { muted: a.muted === true }),
+  'audio.set': (a) => {
+    if (a.output !== undefined) {
+      // A render endpoint's id, as Windows writes it (D-43).
+      if (typeof a.output !== 'string' || !/^\{0\.0\.0\.00000000\}\.\{[0-9a-fA-F-]{36}\}$/.test(a.output)) throw new Error('bad argument');
+      return { output: a.output };
+    }
+    return a.volume !== undefined ? { volume: int(a.volume, 0, 100) } : { muted: a.muted === true };
+  },
   'audio.key': (a) => { if (!['up', 'down', 'mute'].includes(a.key)) throw new Error('bad argument'); return { key: a.key }; },
   'network.get': () => ({}),
   'power.get': () => ({}),

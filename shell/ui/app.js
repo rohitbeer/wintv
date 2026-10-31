@@ -126,7 +126,10 @@ const MOCK_SYSTEM = {
   'display.get': { current: { width: 1920, height: 1080, hz: 60 }, modes: [
     { width: 3840, height: 2160, hz: 60 }, { width: 3840, height: 2160, hz: 30 }, { width: 1920, height: 1080, hz: 120 },
     { width: 1920, height: 1080, hz: 60 }, { width: 1280, height: 720, hz: 60 }] },
-  'audio.get': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false },
+  'audio.get': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false, outputs: [
+    { id: '{0.0.0.00000000}.{a}', name: 'LG TV (NVIDIA High Definition Audio)', current: true },
+    { id: '{0.0.0.00000000}.{b}', name: 'Soundbar (USB Audio)', current: false },
+    { id: '{0.0.0.00000000}.{c}', name: 'Headphones (WH-1000XM4)', current: false }] },
   'audio.set': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false },
   'power.get': { screenOff: 30, sleep: 60 },
   'power.set': { screenOff: 30, sleep: 60 },
@@ -1842,9 +1845,30 @@ function soundRows(a) {
   return [
     volume,
     { kind: 'toggle', label: 'Mute', on: a.muted, run: (on) => api.system('audio.set', { muted: on }) },
-    { kind: 'info', label: 'Output', value: a.device },
+    outputRow(a),
     nav,
   ];
+}
+
+// Where the sound goes (D-43): the TV over HDMI, a soundbar, headphones. A
+// choice once there is more than one; Windows' own default for everything.
+function outputRow(a) {
+  // Two outputs can carry the same name (two HDMI ports on one graphics
+  // card): number the second the way Windows' own lists do.
+  const seen = {};
+  const outs = (a.outputs || []).map((o) => {
+    seen[o.name] = (seen[o.name] || 0) + 1;
+    return { ...o, name: seen[o.name] > 1 ? `${o.name} ${seen[o.name]}` : o.name };
+  });
+  if (outs.length < 2) return { kind: 'info', label: 'Output', value: a.device };
+  return { kind: 'choice', label: 'Output', value: outs.find((o) => o.current)?.name || a.device,
+    options: outs.map((o) => ({ label: o.name + (o.current ? '  ✓' : ''), current: o.current, run: () => setOutput(o) })) };
+}
+
+async function setOutput(o) {
+  const r = await api.system('audio.set', { output: o.id });
+  toast(r.ok ? `Sound now plays on ${o.name}` : r.error || 'Windows didn’t switch');
+  refreshSection();
 }
 
 // The screen saver is WinTV's (the clock screen, below); turning the screen
