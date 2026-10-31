@@ -90,6 +90,8 @@ const api = window.wintv || {
   onPrefs: () => {},
   onFiles: () => {},
   onDrives: () => {},
+  onPad: () => {},
+  onPadNative: () => {},
 };
 
 // Files in a plain browser: a few folders, a USB stick and a Recycle Bin.
@@ -1276,9 +1278,15 @@ function padButton(gp, i, t, fn, repeat) {
   else if (down && repeat && t >= pad.next[i]) { fn(); pad.next[i] = t + 110; }
   pad.held[i] = down;
 }
+// Set when WinTV's input helper reads the PlayStation controller itself
+// (D-45): then the browser's Gamepad API leaves Sony pads alone here, or
+// every press would count twice.
+let padNative = false;
+
 function pollPad(t) {
   for (const gp of navigator.getGamepads?.() || []) {
     if (!gp) continue;
+    if (padNative && /Vendor: 054c/i.test(gp.id)) continue;
     if (!pad.seen) { pad.seen = true; maybeGuide('gamepad'); }
     const [ax = 0, ay = 0, rx = 0, ry = 0] = gp.axes;
     const anything = gp.buttons.some((b) => b.pressed) || gp.axes.some((a) => Math.abs(a) > 0.6);
@@ -1307,6 +1315,20 @@ function pollPad(t) {
     padButton(g, 9, t, openContext, false);
     if (Math.abs(rx) > 0.15 || Math.abs(ry) > 0.15) { lean.tx = rx; lean.ty = ry; }
   }
+}
+
+// A PlayStation controller through WinTV's input helper (D-45): the same as
+// the remote. Triangle or Options is the app menu; a touchpad swipe moves.
+function padPress(p) {
+  touched();
+  if (wake()) return;
+  setPointer(false);
+  if (guide) { if (p.b === 'ok' || p.b === 'back') closeGuide(); return; }
+  const dirs = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  if (dirs[p.b]) { move(...dirs[p.b]); return; }
+  if (p.b === 'ok') { if (!p.repeat) activate(); return; }
+  if (p.b === 'back') { back(); return; }
+  if (p.b === 'menu' || p.b === 'options') openContext();
 }
 
 // ------------------------------------------------------------------ motion
@@ -2322,6 +2344,9 @@ function watchIdle() {
   });
   api.onPrefs(usePrefs);
   api.onDevice(maybeGuide);
+  padNative = state.padNative === true;
+  api.onPadNative((on) => { padNative = on === true; });
+  api.onPad(padPress);
   api.onFiles((root) => {
     wake();
     closeSheet();

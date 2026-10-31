@@ -180,6 +180,7 @@ function publicState() {
     browser: config.browser ? path.basename(config.browser, '.exe') : null,
     user: os.userInfo().username,
     version: app.getVersion(),
+    padNative, // a PlayStation controller is read by input.ps1 (D-45)
     prefs,
     art: artState(),
   };
@@ -706,8 +707,43 @@ function onInput(msg) {
   else if (msg.ev === 'hwtype') { hwKeyboardAt = Date.now(); closeSurface('keyboard'); }
   else if (msg.ev === 'grab-expired') { log('input: grab expired'); closeSurfaces(); }
   else if (msg.ev === 'device') deviceSeen(msg.kind);
+  else if (msg.ev === 'pad') onPad(msg);
+  else if (msg.ev === 'pad-open') {
+    log('pad:', msg.name, msg.bt ? 'over Bluetooth' : 'over USB');
+    if (!padNative) { padNative = true; if (win && !win.isDestroyed()) win.webContents.send('pad-native', true); }
+    deviceSeen('gamepad');
+  }
   else if (msg.ev === 'ready') { log(`input: ready hook=${msg.hook} uia=${msg.uia}`); syncGrab(); }
   else if (msg.ev === 'error') log('input:', msg.message);
+}
+
+// PlayStation controllers, read everywhere by input.ps1 (D-45). The PS
+// button is Home (hold: quick settings). The rest: the system layer gets its
+// keys, the home screen its moves, one of WinTV's browser apps keyboard keys
+// (and the touchpad a page scroll); any other program, a game, reads the
+// controller itself and gets nothing from WinTV.
+let padNative = false;
+const PAD_LAYER = { up: 'up', down: 'down', left: 'left', right: 'right', ok: 'ok', back: 'back' };
+const PAD_APP = { up: 'up', down: 'down', left: 'left', right: 'right', ok: 'enter', back: 'browserback' };
+
+function onPad(msg) {
+  if (msg.b === 'home') { onHomeKey(msg.down, false); return; }
+  if (!msg.down) return;
+  const swipe = msg.b === 'swipe' ? (msg.dy < 0 ? 'up' : msg.dy > 0 ? 'down' : msg.dx < 0 ? 'left' : 'right') : null;
+  if ([...surfaces].some((s) => INTERACTIVE.includes(s))) {
+    const k = swipe || PAD_LAYER[msg.b];
+    if (k) layerSend('key', { k, repeat: msg.repeat === true });
+    return;
+  }
+  if (win && !win.isDestroyed() && win.isFocused()) {
+    win.webContents.send('pad', { b: swipe || msg.b, repeat: msg.repeat === true });
+    return;
+  }
+  if (!running.get(frontApp)?.dir) return; // not a WinTV browser app: leave the controller to it
+  if (msg.b === 'menu' || msg.b === 'options') { openQuick(); return; }
+  if (msg.b === 'swipe') { if (msg.dy) inputSend({ op: 'wheel', notches: -msg.dy * 2 }); return; }
+  const key = PAD_APP[msg.b];
+  if (key) inputSend({ op: 'key', key });
 }
 
 function onHomeKey(down, repeat) {

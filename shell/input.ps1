@@ -10,11 +10,14 @@
 #   {"ev":"hwtype"}                                       someone typed on a real keyboard (which key is never sent)
 #   {"ev":"grab-expired"}                                 nobody used the system layer for 2 minutes
 #   {"ev":"device","kind":"remote"}                      a remote or a keyboard was first used (once each)
+#   {"ev":"pad","b":"ok","down":true,"repeat":false}     a PlayStation controller (D-45, see WinTV.Pads)
+#   {"ev":"pad-open","name":"DualSense","bt":true}       ... and one was found
 #   {"ev":"ready","hook":true,"uia":true}
 # In (one JSON object per line):
 #   {"op":"grab","on":true}        arrows/OK/Back go to the system layer instead of the app
 #   {"op":"type","text":"abc"}     type into whatever has the focus
-#   {"op":"key","key":"backspace"} backspace | enter | left | right | tab | f11 | address (Ctrl+L)
+#   {"op":"key","key":"backspace"} backspace | enter | left | right | up | down | escape | browserback | tab | f11 | address (Ctrl+L)
+#   {"op":"wheel","notches":-1}    the mouse wheel in the app in front (negative = down)
 #   {"op":"screen-off"}            picture off; any button brings it back
 #
 # Privacy: the hook sees every key pressed in this session, as any keyboard
@@ -29,8 +32,10 @@ $refs = @([System.Windows.Automation.AutomationElement].Assembly.Location,
           [System.Windows.Automation.ControlType].Assembly.Location)
 Add-Type -ReferencedAssemblies $refs -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Threading;
 using System.Windows.Automation;
 namespace WinTV {
@@ -237,6 +242,10 @@ namespace WinTV {
                 case "tab": vk = VK_TAB; break;
                 case "left": vk = VK_LEFT; ext = KEYEVENTF_EXTENDEDKEY; break;
                 case "right": vk = VK_RIGHT; ext = KEYEVENTF_EXTENDEDKEY; break;
+                case "up": vk = VK_UP; ext = KEYEVENTF_EXTENDEDKEY; break;
+                case "down": vk = VK_DOWN; ext = KEYEVENTF_EXTENDEDKEY; break;
+                case "escape": vk = VK_ESCAPE; break;
+                case "browserback": vk = VK_BROWSER_BACK; ext = KEYEVENTF_EXTENDEDKEY; break;
                 case "f11": vk = VK_F11; break; // the app's full screen, on or off
                 case "address": // Ctrl+L: the browser's address bar
                     Send(new[] { KeyInput(VK_CONTROL, 0, 0), KeyInput(VK_L, 0, 0), KeyInput(VK_L, 0, KEYEVENTF_KEYUP), KeyInput(VK_CONTROL, 0, KEYEVENTF_KEYUP) });
@@ -244,6 +253,13 @@ namespace WinTV {
                 default: throw new ArgumentException("unknown key " + name);
             }
             Send(new[] { KeyInput((ushort)vk, 0, ext), KeyInput((ushort)vk, 0, ext | KEYEVENTF_KEYUP) });
+        }
+
+        // The mouse wheel, as a touchpad swipe scrolls a page (D-45).
+        public static void Wheel(int notches) {
+            var i = new INPUT { type = 0 };
+            i.u.mi = new MOUSEINPUT { data = unchecked((uint)(notches * 120)), flags = 0x0800 /* MOUSEEVENTF_WHEEL */, extra = OURS };
+            Send(new[] { i });
         }
 
         // Picture off: the same message Windows sends when the screen times out.
@@ -295,11 +311,228 @@ namespace WinTV {
             } catch { /* the element went away while we asked */ }
         }
     }
+
+    // ------------------------------------------------------------ PlayStation controllers (D-45)
+    // DualSense and DualShock 4, over USB or Bluetooth, read straight from
+    // their HID reports: Windows has no XInput for them, so nothing else turns
+    // them into keys outside a game. Out (one JSON line each):
+    //   {"ev":"pad","b":"up","down":true,"repeat":false}   up|down|left|right (d-pad or left stick),
+    //        ok (cross), back (circle), menu (triangle), options, create, home (PS), l1, r1, l2, r2
+    //   {"ev":"pad","b":"swipe","dx":0,"dy":1}            a finger moved on the touchpad (one step)
+    //   {"ev":"pad-open","name":"DualSense","bt":true}     a controller was opened (so the home screen
+    //                                                     leaves it to this reader)
+    public static class Pads {
+        [DllImport("hid.dll")] static extern void HidD_GetHidGuid(out Guid g);
+        [DllImport("hid.dll", SetLastError = true)] static extern bool HidD_GetAttributes(SafeFileHandle h, ref HIDD_ATTRIBUTES a);
+        [DllImport("hid.dll", SetLastError = true)] static extern bool HidD_GetPreparsedData(SafeFileHandle h, out IntPtr data);
+        [DllImport("hid.dll")] static extern bool HidD_FreePreparsedData(IntPtr data);
+        [DllImport("hid.dll")] static extern int HidP_GetCaps(IntPtr data, out HIDP_CAPS caps);
+        [DllImport("hid.dll", SetLastError = true)] static extern bool HidD_GetFeature(SafeFileHandle h, byte[] buffer, int length);
+        [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr SetupDiGetClassDevs(ref Guid g, IntPtr enumerator, IntPtr hwnd, int flags);
+        [DllImport("setupapi.dll", SetLastError = true)] static extern bool SetupDiEnumDeviceInterfaces(IntPtr set, IntPtr devInfo, ref Guid g, int index, ref SP_DEVICE_INTERFACE_DATA data);
+        [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr set, ref SP_DEVICE_INTERFACE_DATA data, IntPtr detail, int size, out int required, IntPtr devInfo);
+        [DllImport("setupapi.dll")] static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr sec, uint disposition, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadFile(SafeFileHandle h, byte[] buffer, int length, out int read, IntPtr overlapped);
+
+        [StructLayout(LayoutKind.Sequential)] struct HIDD_ATTRIBUTES { public int Size; public ushort VendorID, ProductID, VersionNumber; }
+        [StructLayout(LayoutKind.Sequential)] struct HIDP_CAPS {
+            public ushort Usage, UsagePage, InputReportByteLength, OutputReportByteLength, FeatureReportByteLength;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 17)] public ushort[] Reserved;
+            public ushort NumberLinkCollectionNodes, NumberInputButtonCaps, NumberInputValueCaps, NumberInputDataIndices,
+                NumberOutputButtonCaps, NumberOutputValueCaps, NumberOutputDataIndices, NumberFeatureButtonCaps, NumberFeatureValueCaps, NumberFeatureDataIndices;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct SP_DEVICE_INTERFACE_DATA { public int cbSize; public Guid InterfaceClassGuid; public int Flags; public IntPtr Reserved; }
+
+        const ushort SONY = 0x054C;
+        static readonly Dictionary<ushort, string> Models = new Dictionary<ushort, string> {
+            { 0x0CE6, "DualSense" }, { 0x0DF2, "DualSense Edge" }, { 0x05C4, "DualShock 4" }, { 0x09CC, "DualShock 4" }, { 0x0BA0, "DualShock 4" },
+        };
+        static readonly HashSet<string> open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static Timer scanTimer;
+
+        public static void Start() {
+            scanTimer = new Timer(_ => Scan(), null, 1000, 3000);   // a controller can be switched on at any time
+        }
+
+        static IEnumerable<string> HidPaths() {
+            Guid g; HidD_GetHidGuid(out g);
+            IntPtr set = SetupDiGetClassDevs(ref g, IntPtr.Zero, IntPtr.Zero, 0x2 | 0x10);   // present, interfaces
+            var paths = new List<string>();
+            if (set == new IntPtr(-1)) return paths;
+            try {
+                var d = new SP_DEVICE_INTERFACE_DATA { cbSize = Marshal.SizeOf(typeof(SP_DEVICE_INTERFACE_DATA)) };
+                for (int i = 0; SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref g, i, ref d); i++) {
+                    int need;
+                    SetupDiGetDeviceInterfaceDetail(set, ref d, IntPtr.Zero, 0, out need, IntPtr.Zero);
+                    if (need <= 0) continue;
+                    IntPtr buf = Marshal.AllocHGlobal(need);
+                    try {
+                        Marshal.WriteInt32(buf, IntPtr.Size == 8 ? 8 : 6);   // cbSize of SP_DEVICE_INTERFACE_DETAIL_DATA_W
+                        if (SetupDiGetDeviceInterfaceDetail(set, ref d, buf, need, out need, IntPtr.Zero))
+                            paths.Add(Marshal.PtrToStringUni(new IntPtr(buf.ToInt64() + 4)));
+                    } finally { Marshal.FreeHGlobal(buf); }
+                }
+            } finally { SetupDiDestroyDeviceInfoList(set); }
+            return paths;
+        }
+
+        static void Scan() {
+            try {
+                foreach (string path in HidPaths()) {
+                    lock (open) { if (open.Contains(path)) continue; }
+                    // Read and write (the write is only for the Bluetooth feature report); shared, as games read it too.
+                    var h = CreateFile(path, 0xC0000000, 0x3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+                    if (h.IsInvalid) h = CreateFile(path, 0x80000000, 0x3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+                    if (h.IsInvalid) continue;
+                    var a = new HIDD_ATTRIBUTES { Size = Marshal.SizeOf(typeof(HIDD_ATTRIBUTES)) };
+                    string model;
+                    if (!HidD_GetAttributes(h, ref a) || a.VendorID != SONY || !Models.TryGetValue(a.ProductID, out model)) { h.Dispose(); continue; }
+                    int length = 64;
+                    IntPtr pre;
+                    if (HidD_GetPreparsedData(h, out pre)) {
+                        HIDP_CAPS caps;
+                        if (HidP_GetCaps(pre, out caps) == 0x110000 /* HIDP_STATUS_SUCCESS */) length = caps.InputReportByteLength;
+                        HidD_FreePreparsedData(pre);
+                    }
+                    if (length < 10) { h.Dispose(); continue; }       // another of its interfaces (audio, etc.)
+                    bool ds5 = model.StartsWith("DualSense");
+                    bool bt = length > 64;                              // USB reports are 64 bytes
+                    if (bt) {
+                        // Over Bluetooth both send short reports until a calibration
+                        // feature report is read; after that, full ones with the touchpad.
+                        var f = new byte[ds5 ? 41 : 37];
+                        f[0] = (byte)(ds5 ? 0x05 : 0x02);
+                        HidD_GetFeature(h, f, f.Length);
+                    }
+                    lock (open) open.Add(path);
+                    Input.Line("{\"ev\":\"pad-open\",\"name\":\"" + model + "\",\"bt\":" + (bt ? "true" : "false") + "}");
+                    var reader = new Thread(() => Read(path, h, length, ds5));
+                    reader.IsBackground = true;
+                    reader.Start();
+                }
+            } catch { /* never let the scan stop the helper */ }
+        }
+
+        // ------------------------------------------------------------ reports
+        class State {
+            public bool[] dir = new bool[4];                  // up, down, left, right as last sent
+            public long[] since = new long[4], last = new long[4];
+            public int buttons = -1;                          // last button bits (b0 face + b1 + b2 << 16)
+            public bool touching; public int tx, ty, ax, ay;  // finger 1: where, and how far moved
+            public int axisLock;                              // 0 none, 1 vertical, 2 horizontal (per touch)
+            public int sx, sy;                                // left stick: -1, 0 or 1 (with a dead band)
+        }
+        static readonly string[] DirNames = { "up", "down", "left", "right" };
+
+        static void Read(string path, SafeFileHandle h, int length, bool ds5) {
+            var buf = new byte[length];
+            var s = new State();
+            var repeat = new Timer(_ => Repeat(s), null, 50, 50);
+            try {
+                int n;
+                while (ReadFile(h, buf, length, out n, IntPtr.Zero) && n > 0) {
+                    try { Report(buf, n, ds5, s); } catch { }
+                }
+            } finally {
+                repeat.Dispose();
+                h.Dispose();
+                lock (s) for (int i = 0; i < 4; i++) if (s.dir[i]) { s.dir[i] = false; Pad(DirNames[i], false, false); }
+                lock (open) open.Remove(path);                 // switched off or out of range: found again later
+            }
+        }
+
+        static void Report(byte[] r, int n, bool ds5, State s) {
+            int o, b0, b1, b2, touchAt;
+            if (ds5 && r[0] == 0x01 && n >= 64) { o = 1; b0 = r[o + 7]; b1 = r[o + 8]; b2 = r[o + 9]; touchAt = o + 32; }        // USB
+            else if (ds5 && r[0] == 0x31 && n >= 46) { o = 2; b0 = r[o + 7]; b1 = r[o + 8]; b2 = r[o + 9]; touchAt = o + 32; }   // Bluetooth, full
+            else if (!ds5 && r[0] == 0x11 && n >= 45) { o = 3; b0 = r[o + 4]; b1 = r[o + 5]; b2 = r[o + 6]; touchAt = o + 34; }  // DS4 Bluetooth, full
+            else if (r[0] == 0x01 && n >= 10) {                                                                                  // DS4 USB, or the short Bluetooth report
+                o = 1; b0 = r[o + 4]; b1 = r[o + 5]; b2 = r[o + 6];
+                touchAt = !ds5 && n >= 64 ? o + 34 : -1;
+            } else return;
+            lock (s) {
+                // Directions: the d-pad's hat, or the left stick past a dead band.
+                int hat = b0 & 0x0F;
+                s.sx = Axis(r[o], s.sx);
+                s.sy = Axis(r[o + 1], s.sy);
+                bool[] now = {
+                    hat == 7 || hat == 0 || hat == 1 || s.sy < 0,
+                    hat == 3 || hat == 4 || hat == 5 || s.sy > 0,
+                    hat == 5 || hat == 6 || hat == 7 || s.sx < 0,
+                    hat == 1 || hat == 2 || hat == 3 || s.sx > 0,
+                };
+                long t = DateTime.UtcNow.Ticks;
+                for (int i = 0; i < 4; i++) {
+                    if (now[i] == s.dir[i]) continue;
+                    s.dir[i] = now[i];
+                    s.since[i] = s.last[i] = t;
+                    Pad(DirNames[i], now[i], false);
+                }
+                // Buttons: each change, once.
+                int bits = (b0 & 0xF0) | (b1 << 8) | ((b2 & 0x03) << 16);
+                if (s.buttons >= 0) {
+                    int changed = bits ^ s.buttons;
+                    Button(changed, bits, 0x20, "ok"); Button(changed, bits, 0x40, "back"); Button(changed, bits, 0x80, "menu");
+                    Button(changed, bits, 0x100, "l1"); Button(changed, bits, 0x200, "r1"); Button(changed, bits, 0x400, "l2"); Button(changed, bits, 0x800, "r2");
+                    Button(changed, bits, 0x1000, "create"); Button(changed, bits, 0x2000, "options"); Button(changed, bits, 0x10000, "home");
+                }
+                s.buttons = bits;
+                // Touchpad, first finger: steps of 80 (of 1920 x 1080), along the
+                // axis the finger started out on.
+                if (touchAt >= 0 && touchAt + 3 < n) {
+                    bool touching = (r[touchAt] & 0x80) == 0;
+                    int x = r[touchAt + 1] | ((r[touchAt + 2] & 0x0F) << 8);
+                    int y = (r[touchAt + 2] >> 4) | (r[touchAt + 3] << 4);
+                    if (touching && s.touching) {
+                        s.ax += x - s.tx; s.ay += y - s.ty;
+                        if (s.axisLock == 0 && Math.Abs(s.ax) + Math.Abs(s.ay) > 40) s.axisLock = Math.Abs(s.ay) >= Math.Abs(s.ax) ? 1 : 2;
+                        while (s.axisLock == 1 && Math.Abs(s.ay) >= 80) { int d = Math.Sign(s.ay); s.ay -= d * 80; Swipe(0, d); }
+                        while (s.axisLock == 2 && Math.Abs(s.ax) >= 80) { int d = Math.Sign(s.ax); s.ax -= d * 80; Swipe(d, 0); }
+                    } else if (touching) { s.ax = s.ay = 0; s.axisLock = 0; }
+                    s.touching = touching; s.tx = x; s.ty = y;
+                }
+            }
+        }
+
+        // -1, 0 or 1, entering past 48 from the centre (128) and leaving below 80.
+        static int Axis(int v, int was) {
+            int d = v - 128;
+            if (Math.Abs(d) > 80) return Math.Sign(d);
+            if (Math.Abs(d) < 48) return 0;
+            return was;
+        }
+
+        static void Button(int changed, int bits, int mask, string name) {
+            if ((changed & mask) != 0) Pad(name, (bits & mask) != 0, false);
+        }
+
+        // A held direction repeats like a key: after 0.4 s, then every 0.11 s.
+        static void Repeat(State s) {
+            lock (s) {
+                long t = DateTime.UtcNow.Ticks;
+                for (int i = 0; i < 4; i++) {
+                    if (!s.dir[i] || t - s.since[i] < TimeSpan.FromMilliseconds(400).Ticks || t - s.last[i] < TimeSpan.FromMilliseconds(110).Ticks) continue;
+                    s.last[i] = t;
+                    Pad(DirNames[i], true, true);
+                }
+            }
+        }
+
+        static void Pad(string b, bool down, bool repeat) {
+            Input.Line("{\"ev\":\"pad\",\"b\":\"" + b + "\",\"down\":" + (down ? "true" : "false") + ",\"repeat\":" + (repeat ? "true" : "false") + "}");
+        }
+
+        static void Swipe(int dx, int dy) {
+            Input.Line("{\"ev\":\"pad\",\"b\":\"swipe\",\"down\":true,\"dx\":" + dx + ",\"dy\":" + dy + "}");
+        }
+    }
 }
 '@
 
 $hook = [WinTV.Input]::Start()
 $uia = [WinTV.Input]::WatchFocus()
+[WinTV.Pads]::Start()
 [WinTV.Input]::Line((ConvertTo-Json -Compress -InputObject @{ ev = 'ready'; hook = $hook; uia = $uia }))
 
 while ($null -ne ($line = [Console]::In.ReadLine())) {
@@ -309,6 +542,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             'grab'       { [WinTV.Input]::SetGrab([bool]$req.on) }
             'type'       { [WinTV.Input]::Type([string]$req.text) }
             'key'        { [WinTV.Input]::Press([string]$req.key) }
+            'wheel'      { [WinTV.Input]::Wheel([int]$req.notches) }
             'screen-off' { [WinTV.Input]::ScreenOff() }
             default      { throw "unknown op '$($req.op)'" }
         }
