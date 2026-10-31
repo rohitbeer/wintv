@@ -24,6 +24,7 @@ const path = require('node:path');
 const os = require('node:os');
 const art = require('./art');
 const filesLib = require('./files');
+const gpu = require('./gpu');
 
 const IS_WIN = process.platform === 'win32';
 // Admin-owned config (C:\ProgramData\WinTV, read-only for the tv user).
@@ -332,6 +333,7 @@ const IDLE_SLEEP_STEPS = [15, 30, 60, 120, 240, 0];
 
 const SYSTEM_OPS = {
   'display.get': () => ({}),
+  'graphics.get': () => ({}),
   'display.set': (a) => ({ width: int(a.width, 640, 15360), height: int(a.height, 480, 8640), hz: int(a.hz, 20, 1000) }),
   'audio.get': () => ({}),
   'audio.set': (a) => {
@@ -1307,6 +1309,75 @@ function restartIntoUpdate(reason) {
   return { ok: true };
 }
 
+// ---------------------------------------------------------------- graphics (D-47)
+// WinTV must draw with the graphics card: on the CPU, a 12-thread PC idled
+// at 16% and every move stuttered. Chromium stays on what it started with,
+// Windows' fallback renderer on a fresh install before the graphics driver
+// arrives, or the CPU after its GPU process died a few times (a session
+// switch can do that). So WinTV looks at start, every 30 s, when the GPU
+// process ends, when the TV comes back on the screen and when the display
+// changes; if it draws without the card while Windows has a real driver for
+// one, it restarts itself when nobody is in an app: at most once in 10
+// minutes, never without a real driver, and not again with a driver a
+// restart didn't help (gpu.js decides; each decision goes to the log once).
+const GPU_RECORD = () => path.join(app.getPath('userData'), 'gpu-restart.json');
+const STARTED = Date.now();
+let gpuSeen = '';
+let gpuWhy = '';
+let gpuChecking = false;
+
+async function checkGpu(reason) {
+  if (gpuChecking) return;
+  gpuChecking = true;
+  try {
+    const info = await app.getGPUInfo('basic');
+    const status = app.getGPUFeatureStatus();
+    const seen = `${gpu.describe(info)} compositing=${status.gpu_compositing}`;
+    if (seen !== gpuSeen) { gpuSeen = seen; log('gpu:', seen, `(${reason})`); }
+    const software = gpu.software(info, status);
+    let adapters = [];
+    let onConsole = true;
+    if (software) {
+      const r = await system('graphics.get');
+      if (!r.ok) { log('gpu: no adapter list:', r.error); return; }
+      adapters = gpu.realKeys(r.result.adapters);
+      onConsole = r.result.onConsole !== false;
+    }
+    const d = gpu.decide({ software, adapters, onConsole, at: Date.now(), started: STARTED }, readJson(GPU_RECORD()));
+    if (d.why !== gpuWhy) { gpuWhy = d.why; log('gpu:', d.why); }
+    if (!d.restart) {
+      if (d.record) fs.writeFileSync(GPU_RECORD(), JSON.stringify(d.record));
+      return;
+    }
+    if (running.size > 0 || powerMonitor.getSystemIdleTime() < 10) return; // someone is watching: next time
+    fs.writeFileSync(GPU_RECORD(), JSON.stringify(d.record));
+    restartShell('to draw with the graphics card');
+  } catch (e) {
+    log('gpu:', e.message);
+  } finally {
+    gpuChecking = false;
+  }
+}
+
+function watchGpu() {
+  const soon = (reason, ms) => setTimeout(() => checkGpu(reason), ms);
+  checkGpu('start');
+  setInterval(() => checkGpu('check'), 30000);
+  app.on('child-process-gone', (_e, d) => { if (d.type === 'GPU') soon('the GPU process ended', 5000); });
+  powerMonitor.on('unlock-screen', () => soon('back on the screen', 5000));
+  screen.on('display-metrics-changed', () => soon('display changed', 3000));
+  screen.on('display-added', () => soon('display added', 3000));
+}
+
+// A fresh start of the shell; under the supervisor, exiting is enough.
+function restartShell(reason) {
+  log('restarting the shell', `(${reason})`);
+  stopHelper('restart');
+  input?.kill();
+  if (!CHILD) app.relaunch();
+  setTimeout(() => app.exit(0), 300);
+}
+
 // A downloaded WinTV update switches in when nobody is watching: no app
 // open and no button pressed for 10 minutes.
 function watchForUpdate() {
@@ -1601,9 +1672,7 @@ if (SUPERVISE) {
       win.webContents.send('lock');
     });
     app.on('child-process-gone', (_e, d) => log('process gone:', d.type, d.reason, String(d.exitCode)));
-    app.getGPUInfo('basic')
-      .then((g) => log('gpu:', (g.gpuDevice || []).map((d) => `${d.vendorId}:${d.deviceId}${d.active ? '*' : ''}`).join(' ') || 'none'))
-      .catch((e) => log('gpu:', e.message));
+    watchGpu();
     startInput();
     createWindow();
     createLayer();

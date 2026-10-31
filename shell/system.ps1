@@ -1,7 +1,8 @@
 # WinTV system helper: the WinTV Settings screens' only way into Windows.
 # main.js starts it once, as the tv user, and keeps it running. One JSON
 # request per line on stdin, one JSON answer per line on stdout:
-#   {"id":1,"op":"display.get"}                    current picture mode + the modes the TV offers
+#   {"id":1,"op":"display.get"}                    current picture mode + the modes the TV offers + the graphics adapters
+#   {"id":21,"op":"graphics.get"}                  the graphics adapters, and whether this session is on the screen (D-47)
 #   {"id":2,"op":"display.set","width":1920,"height":1080,"hz":60}
 #   {"id":3,"op":"audio.get"}                      output device, volume 0-100, muted
 #   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}, or {"output":"<endpoint id>"} (D-43)
@@ -52,6 +53,10 @@ namespace WinTV {
         const int DM_BITSPERPEL = 0x40000, DM_PELSWIDTH = 0x80000, DM_PELSHEIGHT = 0x100000, DM_DISPLAYFREQUENCY = 0x400000;
 
         static DEVMODE Blank() { var d = new DEVMODE(); d.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE)); return d; }
+
+        // Whether this session is the one on the screen, or another account's is (D-47).
+        [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+        public static bool OnConsole() { return WTSGetActiveConsoleSessionId() == (uint)System.Diagnostics.Process.GetCurrentProcess().SessionId; }
 
         public static int[] Current() {
             var d = Blank();
@@ -750,7 +755,23 @@ function Get-DisplayInfo {
     @{
         current = if ($now) { @{ width = $now[0]; height = $now[1]; hz = $now[2] } } else { $null }
         modes   = @([WinTV.Display]::Modes() | ForEach-Object { @{ width = $_[0]; height = $_[1]; hz = $_[2] } })
+        adapters = @(Get-GraphicsAdapters)
     }
+}
+
+# The graphics adapters (D-47). basic: Windows' own fallback driver, which
+# draws without the card's acceleration and offers one picture mode: it is
+# display.inf whatever the card, while its name is translated.
+function Get-GraphicsAdapters {
+    @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
+        @{
+            id     = [string]$_.PNPDeviceID
+            name   = [string]$_.Name
+            driver = [string]$_.DriverVersion
+            basic  = ([string]$_.InfFilename -eq 'display.inf') -or ([string]$_.Name -like 'Microsoft Basic Display*')
+            ok     = ($_.ConfigManagerErrorCode -eq 0)
+        }
+    })
 }
 
 # The output's name, from where Windows keeps it for the device ("Speakers (…)").
@@ -848,6 +869,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         $req = $line | ConvertFrom-Json
         $result = switch ($req.op) {
             'display.get' { Get-DisplayInfo }
+            'graphics.get' { @{ adapters = @(Get-GraphicsAdapters); onConsole = [WinTV.Display]::OnConsole() } }
             'display.set' { @{ code = [WinTV.Display]::Set([int]$req.width, [int]$req.height, [int]$req.hz) } }
             'audio.get'   { Get-AudioInfo }
             'audio.set'   {

@@ -127,7 +127,9 @@ function mockFiles(op, a) {
 const MOCK_SYSTEM = {
   'display.get': { current: { width: 1920, height: 1080, hz: 60 }, modes: [
     { width: 3840, height: 2160, hz: 60 }, { width: 3840, height: 2160, hz: 30 }, { width: 1920, height: 1080, hz: 120 },
-    { width: 1920, height: 1080, hz: 60 }, { width: 1280, height: 720, hz: 60 }] },
+    { width: 1920, height: 1080, hz: 60 }, { width: 1280, height: 720, hz: 60 }],
+    // as on a fresh install, before Windows Update brings the driver (D-47)
+    adapters: [{ id: 'PCI\\VEN_10DE&DEV_2482', name: 'Microsoft Basic Display Adapter', driver: '10.0.26300.1', basic: true, ok: true }] },
   'audio.get': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false, outputs: [
     { id: '{0.0.0.00000000}.{a}', name: 'LG TV (NVIDIA High Definition Audio)', current: true },
     { id: '{0.0.0.00000000}.{b}', name: 'Soundbar (USB Audio)', current: false },
@@ -1836,8 +1838,15 @@ async function sectionRows(id) {
 
 const fmtMode = (m) => `${m.width} × ${m.height}`;
 
-function displayRows({ current, modes }) {
-  if (!current) return [{ kind: 'info', label: 'Picture', value: 'No display found' }];
+function displayRows({ current, modes, adapters }) {
+  // Windows' fallback driver only (D-47): one picture mode, and slow.
+  const list = adapters || [];
+  const noDriver = list.length > 0 && !list.some((a) => !a.basic && a.ok);
+  const driverRow = { kind: 'action', label: 'Graphics driver', value: 'Not installed yet', press: () => {
+    pickSection(SECTIONS.findIndex((s) => s.id === 'updates'));
+    toast('Windows Update installs the graphics driver once the TV is online. WinTV switches to it by itself.');
+  } };
+  if (!current) return [...(noDriver ? [driverRow] : []), { kind: 'info', label: 'Picture', value: 'No display found' }];
   // Below 1280 × 720 nothing is readable on a TV, so those sizes aren't offered.
   const sizes = [];
   for (const m of modes) {
@@ -1859,6 +1868,7 @@ function displayRows({ current, modes }) {
       }) },
     { kind: 'choice', label: 'Refresh rate', value: `${current.hz} Hz`,
       options: rates.map((m) => ({ label: `${m.hz} Hz${m.hz === current.hz ? '  ✓' : ''}`, current: m.hz === current.hz, run: () => changeMode(m, current) })) },
+    ...(noDriver ? [driverRow] : []),
   ];
 }
 
