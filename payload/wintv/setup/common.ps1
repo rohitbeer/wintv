@@ -120,6 +120,13 @@ function Register-WinTVTask {
             $tr = $def.Triggers.Create(0)
             $tr.Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-Winlogon''] and EventID=7002]]</Select></Query></QueryList>'
         }
+        elseif ($t -eq 'online') {
+            # A network connected: NetworkProfile's event 10000. A minute later,
+            # so the name servers answer.
+            $tr = $def.Triggers.Create(0)
+            $tr.Subscription = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[Provider[@Name=''Microsoft-Windows-NetworkProfile''] and EventID=10000]]</Select></Query></QueryList>'
+            $tr.Delay = 'PT1M'
+        }
     }
     $act = $def.Actions.Create(0)
     $act.Path = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -137,6 +144,13 @@ function Register-UpdateTasks {
         -Description 'WinTV: install the updates Windows would install by itself, now (Settings > Updates).' -UsersMayStart
     Register-WinTVTask -Name 'WinTVUpdate' -Script 'updates.ps1' -Arguments '-Job wintv' -Triggers boot, daily `
         -Description 'WinTV: install a newer signed WinTV release, or roll back one that does not start.' -UsersMayStart
+    Register-UpdatesOnlineTask
+}
+
+# When a network connects, the two checks above start at once (D-48).
+function Register-UpdatesOnlineTask {
+    Register-WinTVTask -Name 'UpdatesOnline' -Script 'updates.ps1' -Arguments '-Job online' -Triggers online `
+        -Description 'WinTV: when a network connects, check for Windows and WinTV updates at once (at most every 30 minutes).'
 }
 
 # Settings > Admin's broker (D-39): the TV account may start it, not change

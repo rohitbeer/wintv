@@ -3,8 +3,9 @@
 #   \WinTV\WindowsUpdateCheck     -Job windows-check    (also at boot and daily)
 #   \WinTV\WindowsUpdateInstall   -Job windows-install  (the TV's "Install now")
 #   \WinTV\WinTVUpdate            -Job wintv            (also at boot and daily)
+#   \WinTV\UpdatesOnline          -Job online           (when a network connects: starts the two checks, D-48)
 # Progress goes to C:\ProgramData\WinTV\state\*.json, which the shell reads.
-param([Parameter(Mandatory)][ValidateSet('windows-check', 'windows-install', 'wintv')][string]$Job)
+param([Parameter(Mandatory)][ValidateSet('windows-check', 'windows-install', 'wintv', 'online')][string]$Job)
 . "$PSScriptRoot\common.ps1"
 $Stage = "updates/$Job"
 $StateDir = Join-Path $Root 'state'
@@ -56,6 +57,48 @@ function Invoke-WindowsCheck {
     Save-State 'windows-update' @{ state = 'idle'; checked = (Get-Date).ToString('o'); pending = $list
         rebootRequired = (Test-RebootRequired); lastInstall = (Get-LastInstall) }
     Write-Log "  $($list.Count) update(s) available"
+    Start-WindowsAutoUpdate
+}
+
+# Windows' own automatic updates search about once a day, at a time of their
+# choosing: a TV set up offline (setup skips Wi-Fi) waited for that, graphics
+# driver included. So every check also starts Windows' own search, which then
+# downloads and installs as Windows would by itself (D-48). UsoClient's
+# StartInteractiveScan is what Windows' "Check for updates" button runs; it is
+# undocumented, so the documented DetectNow is the fallback (on Windows 11 it
+# was seen to do nothing).
+function Start-WindowsAutoUpdate {
+    $uso = Join-Path $env:SystemRoot 'System32\UsoClient.exe'
+    try {
+        if (-not (Test-Path $uso)) { throw 'UsoClient.exe is missing' }
+        $p = Start-Process -FilePath $uso -ArgumentList 'StartInteractiveScan' -WindowStyle Hidden -Wait -PassThru
+        Write-Log "  Windows Update started its own search (UsoClient, exit $($p.ExitCode))"
+    } catch {
+        Write-Log "  UsoClient: $($_.Exception.Message); trying DetectNow"
+        try { (New-Object -ComObject Microsoft.Update.AutoUpdate).DetectNow(); Write-Log '  asked Windows Update to search (DetectNow)' }
+        catch { Write-Log "  DetectNow: $($_.Exception.Message)" }
+    }
+}
+
+# A network just connected (D-48): a TV set up offline, or back on its Wi-Fi,
+# checks now instead of at the next boot or 4 a.m. Not in the first minutes
+# after a boot (the boot runs check then) and not twice in 30 minutes (a
+# Wi-Fi that keeps dropping). Starting the tasks, not running the jobs here,
+# keeps one run of each at a time (a second start is ignored).
+function Invoke-Online {
+    $up = (Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+    if ($up.TotalMinutes -lt 6) { Write-Log '  just started: the boot checks run anyway'; return }
+    $stamp = Join-Path $StateDir 'online.json'
+    $last = Read-Json $stamp
+    if ($last -and $last.at) {
+        $ago = ((Get-Date) - [datetime]$last.at).TotalMinutes
+        if ($ago -ge 0 -and $ago -lt 30) { Write-Log ("  checked {0:N0} min ago; not again yet" -f $ago); return }
+    }
+    Save-Json $stamp @{ at = (Get-Date).ToString('o') }
+    foreach ($task in 'WindowsUpdateCheck', 'WinTVUpdate') {
+        try { Start-ScheduledTask -TaskPath '\WinTV\' -TaskName $task -ErrorAction Stop; Write-Log "  started $task" }
+        catch { Write-Log "  $task did not start: $($_.Exception.Message)" }
+    }
 }
 
 function Invoke-WindowsInstall {
@@ -200,13 +243,14 @@ function Invoke-WinTVUpdate {
 # ---------------------------------------------------------------- run
 # $script: because Invoke-Step's own $Name would win inside the step
 # (PowerShell scoping is dynamic).
-$script:StateName = if ($Job -eq 'wintv') { 'wintv-update' } else { 'windows-update' }
+$script:StateName = switch ($Job) { 'wintv' { 'wintv-update' } 'online' { 'online' } default { 'windows-update' } }
 Invoke-Step "updates: $Job" {
     try {
         switch ($Job) {
             'windows-check' { Invoke-WindowsCheck }
             'windows-install' { Invoke-WindowsInstall }
             'wintv' { Invoke-WinTVUpdate }
+            'online' { Invoke-Online }
         }
     } catch {
         $prev = Read-Json (Join-Path $StateDir "$script:StateName.json")

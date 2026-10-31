@@ -14,6 +14,11 @@ Invoke-Step 'policies' { Invoke-Native "$env:SystemRoot\System32\reg.exe" @('imp
 # Updates bring new setup scripts but don't register tasks; a task a newer
 # release needs comes here, at the next boot (D-39).
 Invoke-Step 'admin tasks' { Register-AdminTask }
+# Only the new task: registering the update tasks again would drop this
+# boot's delayed run of the ones with a boot trigger (D-48).
+if (-not (Get-ScheduledTask -TaskPath '\WinTV\' -TaskName 'UpdatesOnline' -ErrorAction SilentlyContinue)) {
+    Invoke-Step 'update task: check when a network connects' { Register-UpdatesOnlineTask }
+}
 # Windows 11 24H2 lists Wi-Fi networks only to apps allowed to use location,
 # and setup leaves location off. Turned on once (D-44); if the admin turns it
 # off later, it stays off.
