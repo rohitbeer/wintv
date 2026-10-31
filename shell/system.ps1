@@ -6,7 +6,10 @@
 #   {"id":3,"op":"audio.get"}                      output device, volume 0-100, muted
 #   {"id":4,"op":"audio.set","volume":40}          or {"muted":true}, or {"output":"<endpoint id>"} (D-43)
 #   {"id":7,"op":"audio.key","key":"up"}           the remote's volume keys: up | down | mute
-#   {"id":5,"op":"network.get"}                    connections and their addresses
+#   {"id":5,"op":"network.get"}                    connections and their addresses, and whether there is Wi-Fi
+#   {"id":15,"op":"wifi.scan"}                     networks near by; status none | consent | ok (D-44)
+#   {"id":16,"op":"wifi.allow"}                    this account's location consent, then wifi.scan
+#   {"id":17,"op":"wifi.connect","ssid":"Home","key":"...","auth":"wpa2","hidden":false,"profile":""}
 #   {"id":9,"op":"power.get"}                      screen-off and sleep timeouts (plugged in), minutes
 #   {"id":10,"op":"power.set","screenOff":30}      or {"sleep":60}; 0 = never
 #   {"id":11,"op":"motion.set","reduce":true}      Windows' animation effects off (apps keep still)
@@ -287,6 +290,209 @@ namespace WinTV {
 }
 '@
 
+# Wi-Fi from the TV (D-44): Windows' Native Wi-Fi API. Listing networks needs
+# location consent since Windows 11 24H2 (WlanScan and WlanGetAvailableNetworkList
+# answer 5 without it); saving a profile and connecting don't.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Security;
+using System.Text;
+using System.Threading;
+namespace WinTV {
+    public class WifiNetwork {
+        public string Ssid; public int Signal; public bool Secure; public bool Connected; public bool Saved; public string Auth; public string Profile;
+    }
+
+    public static class Wifi {
+        [DllImport("wlanapi.dll")] static extern int WlanOpenHandle(int clientVersion, IntPtr reserved, out int negotiated, out IntPtr handle);
+        [DllImport("wlanapi.dll")] static extern int WlanCloseHandle(IntPtr handle, IntPtr reserved);
+        [DllImport("wlanapi.dll")] static extern int WlanEnumInterfaces(IntPtr handle, IntPtr reserved, out IntPtr list);
+        [DllImport("wlanapi.dll")] static extern int WlanScan(IntPtr handle, ref Guid iface, IntPtr ssid, IntPtr ie, IntPtr reserved);
+        [DllImport("wlanapi.dll")] static extern int WlanGetAvailableNetworkList(IntPtr handle, ref Guid iface, int flags, IntPtr reserved, out IntPtr list);
+        [DllImport("wlanapi.dll", CharSet = CharSet.Unicode)] static extern int WlanSetProfile(IntPtr handle, ref Guid iface, int flags, string xml, string sddl, bool overwrite, IntPtr reserved, out int reason);
+        [DllImport("wlanapi.dll", CharSet = CharSet.Unicode)] static extern int WlanDeleteProfile(IntPtr handle, ref Guid iface, string name, IntPtr reserved);
+        [DllImport("wlanapi.dll")] static extern int WlanConnect(IntPtr handle, ref Guid iface, ref ConnectionParameters p, IntPtr reserved);
+        [DllImport("wlanapi.dll")] static extern int WlanQueryInterface(IntPtr handle, ref Guid iface, int opcode, IntPtr reserved, out int size, out IntPtr data, IntPtr valueType);
+        [DllImport("wlanapi.dll")] static extern void WlanFreeMemory(IntPtr p);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct ConnectionParameters {
+            public int Mode;                                       // 0: by profile
+            [MarshalAs(UnmanagedType.LPWStr)] public string Profile;
+            public IntPtr Ssid, Bssids;
+            public int BssType;                                    // 1: infrastructure
+            public int Flags;
+        }
+
+        public const int NoAdapter = -1, NoConsent = 5;
+
+        // The first Wi-Fi adapter, or false. A PC without Wi-Fi has no WLAN
+        // service running at all (WlanOpenHandle fails): the same answer.
+        static bool Open(out IntPtr handle, out Guid iface) {
+            iface = Guid.Empty;
+            int v;
+            if (WlanOpenHandle(2, IntPtr.Zero, out v, out handle) != 0) { handle = IntPtr.Zero; return false; }
+            IntPtr list;
+            if (WlanEnumInterfaces(handle, IntPtr.Zero, out list) != 0) return false;
+            try {
+                if (Marshal.ReadInt32(list) < 1) return false;
+                byte[] g = new byte[16];
+                Marshal.Copy(new IntPtr(list.ToInt64() + 8), g, 0, 16);   // WLAN_INTERFACE_INFO.InterfaceGuid
+                iface = new Guid(g);
+                return true;
+            } finally { WlanFreeMemory(list); }
+        }
+
+        static void Close(IntPtr handle) { if (handle != IntPtr.Zero) WlanCloseHandle(handle, IntPtr.Zero); }
+
+        public static bool HasAdapter() {
+            IntPtr h; Guid g;
+            bool ok = Open(out h, out g);
+            Close(h);
+            return ok;
+        }
+
+        // DOT11_AUTH_ALGORITHM and cipher, as WinTV names them.
+        static string AuthName(int auth, int cipher) {
+            switch (auth) {
+                case 1: return cipher == 0 ? "open" : "wep";
+                case 2: return "wep";
+                case 4: return "wpa";
+                case 7: return "wpa2";
+                case 9: return "wpa3";
+                case 10: return "owe";
+                default: return "enterprise";   // 802.1X: needs a certificate or a user name
+            }
+        }
+
+        // 0 and the networks near by (strongest first, one entry per name), or
+        // NoAdapter / NoConsent / another Windows error code.
+        public static int Scan(out List<WifiNetwork> found) {
+            found = new List<WifiNetwork>();
+            IntPtr h; Guid g;
+            if (!Open(out h, out g)) { Close(h); return NoAdapter; }
+            try {
+                int r = WlanScan(h, ref g, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                if (r == NoConsent) return NoConsent;
+                if (r == 0) Thread.Sleep(3500);                     // the scan finishes by itself, within 4 s
+                IntPtr list;
+                r = WlanGetAvailableNetworkList(h, ref g, 0, IntPtr.Zero, out list);
+                if (r != 0) return r;
+                try {
+                    int n = Marshal.ReadInt32(list);
+                    var byName = new Dictionary<string, WifiNetwork>();
+                    for (int i = 0; i < n; i++) {
+                        long at = list.ToInt64() + 8 + i * 628;      // WLAN_AVAILABLE_NETWORK is 628 bytes
+                        int len = Math.Min(32, Marshal.ReadInt32(new IntPtr(at + 512)));
+                        if (len <= 0) continue;                       // a hidden network: no name to show
+                        byte[] raw = new byte[len];
+                        Marshal.Copy(new IntPtr(at + 516), raw, 0, len);
+                        string ssid = Encoding.UTF8.GetString(raw);
+                        int flags = Marshal.ReadInt32(new IntPtr(at + 620));
+                        string profile = Marshal.PtrToStringUni(new IntPtr(at));   // strProfileName, "" if not saved
+                        var net = new WifiNetwork {
+                            Profile = profile,
+                            Ssid = ssid,
+                            Signal = Marshal.ReadInt32(new IntPtr(at + 604)),
+                            Secure = Marshal.ReadInt32(new IntPtr(at + 608)) != 0,
+                            Auth = AuthName(Marshal.ReadInt32(new IntPtr(at + 612)), Marshal.ReadInt32(new IntPtr(at + 616))),
+                            Connected = (flags & 1) != 0,
+                            Saved = (flags & 2) != 0,
+                        };
+                        WifiNetwork had;
+                        if (byName.TryGetValue(ssid, out had)) {
+                            had.Connected |= net.Connected; had.Saved |= net.Saved; had.Signal = Math.Max(had.Signal, net.Signal);
+                            if (string.IsNullOrEmpty(had.Profile)) had.Profile = net.Profile;
+                        } else byName[ssid] = net;
+                    }
+                    found.AddRange(byName.Values);
+                    found.Sort((a, b) => b.Connected.CompareTo(a.Connected) != 0 ? b.Connected.CompareTo(a.Connected) : b.Signal.CompareTo(a.Signal));
+                    return 0;
+                } finally { WlanFreeMemory(list); }
+            } finally { Close(h); }
+        }
+
+        static string Profile(string ssid, string key, string auth, bool hidden) {
+            var hex = new StringBuilder();
+            foreach (byte b in Encoding.UTF8.GetBytes(ssid)) hex.Append(b.ToString("X2"));
+            string security;
+            if (auth == "open") security = "<authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption>";
+            else {
+                string a = auth == "wpa3" ? "WPA3SAE" : auth == "wpa" ? "WPAPSK" : "WPA2PSK";
+                string c = auth == "wpa" ? "TKIP" : "AES";
+                security = "<authEncryption><authentication>" + a + "</authentication><encryption>" + c + "</encryption><useOneX>false</useOneX></authEncryption>"
+                    + "<sharedKey><keyType>" + (key.Length == 64 ? "networkKey" : "passPhrase") + "</keyType><protected>false</protected><keyMaterial>"
+                    + SecurityElement.Escape(key) + "</keyMaterial></sharedKey>";
+            }
+            return "<?xml version=\"1.0\"?><WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">"
+                + "<name>" + SecurityElement.Escape(ssid) + "</name>"
+                + "<SSIDConfig><SSID><hex>" + hex + "</hex><name>" + SecurityElement.Escape(ssid) + "</name></SSID>"
+                + "<nonBroadcast>" + (hidden ? "true" : "false") + "</nonBroadcast></SSIDConfig>"
+                + "<connectionType>ESS</connectionType><connectionMode>auto</connectionMode>"
+                + "<MSM><security>" + security + "</security></MSM></WLANProfile>";
+        }
+
+        // Saves the network (for every account if Windows allows, else for
+        // this one) unless key is null and it is saved already, then connects
+        // and waits up to 25 s. "" when connected, else what went wrong. A new
+        // profile that didn't connect (a wrong password) is removed again.
+        public static string Connect(string ssid, string key, string auth, bool hidden, string savedProfile) {
+            IntPtr h; Guid g;
+            if (!Open(out h, out g)) { Close(h); return "This PC has no Wi-Fi"; }
+            bool created = false;
+            try {
+                if (key != null || auth == "open") {
+                    int reason;
+                    string xml = Profile(ssid, key ?? "", auth, hidden);
+                    int r = WlanSetProfile(h, ref g, 0, xml, null, true, IntPtr.Zero, out reason);
+                    if (r == 5) r = WlanSetProfile(h, ref g, 2, xml, null, true, IntPtr.Zero, out reason);   // just this account
+                    if (r != 0) return "Windows didn't take the network (error " + r + ", reason " + reason + ")";
+                    created = true;
+                }
+                string name = created || string.IsNullOrEmpty(savedProfile) ? ssid : savedProfile;
+                var p = new ConnectionParameters { Mode = 0, Profile = name, BssType = 1 };
+                int c = WlanConnect(h, ref g, ref p, IntPtr.Zero);
+                if (c != 0) return "Windows couldn't connect (error " + c + ")";
+                for (int i = 0; i < 50; i++) {
+                    Thread.Sleep(500);
+                    int size; IntPtr data;
+                    if (WlanQueryInterface(h, ref g, 6 /* interface state */, IntPtr.Zero, out size, out data, IntPtr.Zero) != 0) continue;
+                    int state = Marshal.ReadInt32(data);
+                    WlanFreeMemory(data);
+                    if (state == 1) { created = false; return ""; }    // connected
+                    if (state == 4 && i > 6) break;                      // gave up: disconnected
+                }
+                return auth == "open" ? "Couldn't connect" : "Couldn't connect: check the password";
+            } finally {
+                if (created) WlanDeleteProfile(h, ref g, ssid, IntPtr.Zero);
+                Close(h);
+            }
+        }
+    }
+}
+'@
+
+# Location consent for listing networks: the device-wide switch is set once
+# by the boot task (maintain.ps1, D-44); this account's own is set here when
+# someone says yes on the TV.
+function Set-WifiConsent {
+    $b = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
+    New-Item -Path "$b\NonPackaged" -Force | Out-Null
+    Set-ItemProperty -Path $b -Name Value -Value 'Allow'
+    Set-ItemProperty -Path "$b\NonPackaged" -Name Value -Value 'Allow'
+}
+
+function Get-WifiNetworks {
+    $list = $null
+    $code = [WinTV.Wifi]::Scan([ref]$list)
+    if ($code -eq [WinTV.Wifi]::NoAdapter) { return @{ status = 'none' } }
+    if ($code -eq [WinTV.Wifi]::NoConsent) { return @{ status = 'consent' } }
+    if ($code -ne 0) { throw "Windows couldn't list Wi-Fi networks (error $code)" }
+    @{ status = 'ok'; networks = @($list | ForEach-Object { @{ ssid = $_.Ssid; signal = $_.Signal; secure = $_.Secure; connected = $_.Connected; saved = $_.Saved; auth = $_.Auth; profile = $_.Profile } }) }
+}
+
 $IconDir = Join-Path $env:LOCALAPPDATA 'WinTV\cache\icons'
 # Not on a TV: Explorer itself and what it hosts (its desktop would come
 # back): the Run box, Control Panel and the Windows Tools folder; Edge;
@@ -506,7 +712,16 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 }
                 Get-AudioInfo
             }
-            'network.get' { @{ connections = @(Get-NetworkInfo) } }
+            'network.get' { @{ connections = @(Get-NetworkInfo); wifi = [WinTV.Wifi]::HasAdapter() } }
+            'wifi.scan'   { Get-WifiNetworks }
+            'wifi.allow'  { Set-WifiConsent; Get-WifiNetworks }
+            'wifi.connect' {
+                # $null would reach C# as "" (PowerShell's rule): no key = use the saved network.
+                $key = if ($null -ne $req.key) { [string]$req.key } else { [NullString]::Value }
+                $err = [WinTV.Wifi]::Connect([string]$req.ssid, $key, [string]$req.auth, [bool]$req.hidden, [string]$req.profile)
+                if ($err) { throw $err }
+                @{ connected = $true }
+            }
             'power.get'   { Get-PowerInfo }
             'power.set'   {
                 if ($null -ne $req.screenOff) { Set-PowerTimeout 'screenOff' ([int]$req.screenOff) }

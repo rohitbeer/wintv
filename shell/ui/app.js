@@ -133,7 +133,14 @@ const MOCK_SYSTEM = {
   'audio.set': { present: true, device: 'LG TV (NVIDIA High Definition Audio)', volume: 40, muted: false },
   'power.get': { screenOff: 30, sleep: 60 },
   'power.set': { screenOff: 30, sleep: 60 },
-  'network.get': { connections: [{ name: 'Ethernet', wifi: false, network: 'Home', internet: true, ipv4: '192.0.2.80', gateway: '192.0.2.1' }] },
+  'network.get': { wifi: true, connections: [{ name: 'Ethernet', wifi: false, network: 'Home', internet: true, ipv4: '192.0.2.80', gateway: '192.0.2.1' }] },
+  'wifi.scan': { status: 'consent' },
+  'wifi.allow': { status: 'ok', networks: [
+    { ssid: 'Living room', signal: 92, secure: true, connected: false, saved: false, auth: 'wpa2', profile: '' },
+    { ssid: 'Neighbours 5G', signal: 40, secure: true, connected: false, saved: false, auth: 'wpa3', profile: '' },
+    { ssid: 'Cafe guest', signal: 18, secure: false, connected: false, saved: false, auth: 'open', profile: '' },
+    { ssid: 'Office', signal: 60, secure: true, connected: false, saved: false, auth: 'enterprise', profile: '' }] },
+  'wifi.connect': { connected: true },
   about: { windows: 'Microsoft Windows 11 Pro', version: '25H2 (build 26200.1234)', device: 'WINTV', uptimeMinutes: 1500,
     lastUpdate: new Date(Date.now() - 2 * 86400000).toISOString(), restartNeeded: false },
 };
@@ -1931,14 +1938,99 @@ function accessRows() {
   ];
 }
 
-function networkRows({ connections }) {
+function networkRows({ connections, wifi }) {
   const list = connections || [];
-  if (!list.length) return [{ kind: 'info', label: 'Not connected', value: 'Plug in a network cable' }];
-  return list.flatMap((c) => [
+  const rows = list.length ? list.flatMap((c) => [
     { kind: 'info', label: c.wifi ? 'Wi-Fi' : 'Ethernet', value: c.network || c.name },
     { kind: 'info', label: 'Internet', value: c.internet ? 'Connected' : 'No internet' },
     { kind: 'info', label: 'IP address', value: c.ipv4 || '—' },
+  ]) : [{ kind: 'info', label: 'Not connected', value: wifi ? 'Join a Wi-Fi network' : 'Plug in a network cable' }];
+  if (wifi) rows.unshift({ kind: 'action', label: 'Wi-Fi networks', value: list.find((c) => c.wifi)?.network || 'Join', press: openWifi });
+  return rows;
+}
+
+// Wi-Fi (D-44): the networks near by, a password on the TV keyboard, connect.
+// Windows lists networks only to apps allowed to use location, so the first
+// time may ask.
+const strength = (q) => (q >= 70 ? 'strong' : q >= 40 ? 'good' : 'weak'); // words: bar glyphs miss in some fonts
+const WIFI_OK = ['open', 'wpa', 'wpa2', 'wpa3'];
+
+async function openWifi(op = 'wifi.scan') {
+  openSheet('Looking for Wi-Fi networks…', [{ label: 'Cancel', run: closeSheet }]);
+  const mine = sheet;
+  const r = await api.system(op);
+  if (sheet !== mine) return; // cancelled meanwhile
+  if (!r.ok) { closeSheet(); toast(r.error || 'Couldn’t list Wi-Fi networks'); return; }
+  const w = r.result;
+  if (w.status === 'none') { closeSheet(); toast('This PC has no Wi-Fi'); return; }
+  if (w.status === 'consent') {
+    if (op === 'wifi.allow') {
+      openSheet('Location is off for this PC, so Windows lists no networks. The admin can turn it on.', [
+        { label: 'Type a network name', run: otherNetwork }, { label: 'Cancel', run: closeSheet }]);
+      return;
+    }
+    openSheet('Windows shows Wi-Fi networks only to apps allowed to use location. Allow it for WinTV?', [
+      { label: 'Allow and show networks', run: () => openWifi('wifi.allow') },
+      { label: 'Type a network name', run: otherNetwork },
+      { label: 'Cancel', run: closeSheet }]);
+    return;
+  }
+  const nets = w.networks || [];
+  openSheet(nets.length ? 'Wi-Fi' : 'No Wi-Fi networks found', [
+    ...nets.map((n) => ({ label: `${n.ssid}${n.connected ? '  ✓' : ''}  ·  ${strength(n.signal)}${n.secure ? '' : ', open'}`, run: () => pickNetwork(n) })),
+    { label: 'Other network…', run: otherNetwork },
+    { label: 'Cancel', run: closeSheet },
   ]);
+}
+
+function pickNetwork(n) {
+  if (n.connected) { closeSheet(); toast(`Connected to ${n.ssid}`); return; }
+  if (!WIFI_OK.includes(n.auth)) { closeSheet(); toast(`${n.ssid} needs a certificate or a user name: set it up on the Windows desktop`); return; }
+  if (n.saved || n.auth === 'open') { closeSheet(); connectWifi(n, null); return; }
+  askWifiPassword(n);
+}
+
+function askWifiPassword(n) {
+  openSheet(n.ssid, [
+    { input: true, password: true, label: 'Password', run: () => {
+      const field = sheet?.buttons[0];
+      const key = field?.value || '';
+      if (!key) return;
+      field.value = '';
+      closeSheet();
+      connectWifi(n, key);
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+// A network that doesn't show its name: name, then password (none = open).
+function otherNetwork() {
+  openSheet('Other network', [
+    { input: true, label: 'Network name', run: () => {
+      const ssid = sheet?.buttons[0]?.value.trim() || '';
+      if (!ssid) return;
+      closeSheet();
+      openSheet(ssid, [
+        { input: true, password: true, label: 'Password (empty if none)', run: () => {
+          const field = sheet?.buttons[0];
+          const key = field?.value || '';
+          if (field) field.value = '';
+          closeSheet();
+          connectWifi({ ssid, auth: key ? 'wpa2' : 'open', hidden: true }, key || null);
+        } },
+        { label: 'Cancel', run: closeSheet },
+      ]);
+    } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+async function connectWifi(n, key) {
+  toast(`Connecting to ${n.ssid}…`);
+  const r = await api.system('wifi.connect', { ssid: n.ssid, key, auth: n.auth, hidden: !!n.hidden, profile: n.profile || '' });
+  toast(r.ok ? `Connected to ${n.ssid}` : r.error || `Couldn’t connect to ${n.ssid}`);
+  if (settings) refreshSection();
 }
 
 // Admin (D-39): jobs on the PC itself, behind the admin password. A SYSTEM

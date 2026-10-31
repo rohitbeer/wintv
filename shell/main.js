@@ -343,6 +343,23 @@ const SYSTEM_OPS = {
   },
   'audio.key': (a) => { if (!['up', 'down', 'mute'].includes(a.key)) throw new Error('bad argument'); return { key: a.key }; },
   'network.get': () => ({}),
+  // Wi-Fi (D-44): the helper checks again what Windows accepts.
+  'wifi.scan': () => ({}),
+  'wifi.allow': () => ({}),
+  'wifi.connect': (a) => {
+    const ssid = typeof a.ssid === 'string' ? a.ssid : '';
+    if (!ssid || Buffer.byteLength(ssid, 'utf8') > 32 || /[\u0000-\u001f]/.test(ssid)) throw new Error('A network name has 1 to 32 characters');
+    const auth = a.auth ?? 'wpa2';
+    if (!['open', 'wpa', 'wpa2', 'wpa3'].includes(auth)) throw new Error('This network needs a certificate or a user name: set it up on the Windows desktop (Settings > Admin)');
+    let key = null;
+    if (a.key !== undefined && a.key !== null) {
+      if (typeof a.key !== 'string' || /[\u0000-\u001f]/.test(a.key)) throw new Error('bad argument');
+      if (auth !== 'open' && !/^[0-9a-fA-F]{64}$/.test(a.key) && (a.key.length < 8 || a.key.length > 63)) throw new Error('A Wi-Fi password has 8 to 63 characters');
+      key = a.key;
+    }
+    const profile = typeof a.profile === 'string' && a.profile.length <= 256 ? a.profile : '';
+    return { ssid, key, auth, hidden: a.hidden === true, profile };
+  },
   'power.get': () => ({}),
   'power.set': (a) => (a.screenOff !== undefined ? { screenOff: oneOf(a.screenOff, SCREEN_OFF_STEPS) } : { sleep: oneOf(a.sleep, IDLE_SLEEP_STEPS) }),
   'motion.set': (a) => ({ reduce: a.reduce === true }),
@@ -379,7 +396,10 @@ function startHelper() {
   });
 }
 
-async function system(op, args, timeoutMs = 20000) {
+// Joining a network waits for Windows to connect (up to 25 s).
+const SLOW_OPS = { 'wifi.connect': 45000 };
+
+async function system(op, args, timeoutMs = SLOW_OPS[op] || 20000) {
   const check = SYSTEM_OPS[op];
   if (!check) return { ok: false, error: 'Unknown setting' };
   let clean;
