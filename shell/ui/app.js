@@ -1311,6 +1311,8 @@ window.addEventListener('keyup', (e) => {
 
 // ------------------------------------------------------------------ pointer (air mouse)
 const lean = { x: 0, y: 0, tx: 0, ty: 0 };
+let framing = false; // the motion loop is running (D-54: it stops when nothing moves)
+const leanWritten = new WeakMap(); // tile -> the lean last written to it
 // Pointer mode: while a mouse or air mouse is in use, Back buttons show on
 // screen and Brave opens with its tabs (main.js). Any key ends it.
 function setPointer(on) {
@@ -1327,6 +1329,7 @@ function pointerOver(e, r, c) {
   const b = e.currentTarget.getBoundingClientRect();
   lean.tx = ((e.clientX - b.left) / b.width - 0.5) * 2;
   lean.ty = ((e.clientY - b.top) / b.height - 0.5) * 2;
+  kickFrames();
 }
 window.addEventListener('wheel', (e) => {
   touched();
@@ -1353,10 +1356,14 @@ function padButton(gp, i, t, fn, repeat) {
 // every press would count twice.
 let padNative = false;
 
+// True while a gamepad is there for the browser to read (the motion loop
+// keeps asking it then).
 function pollPad(t) {
+  let usable = false;
   for (const gp of navigator.getGamepads?.() || []) {
     if (!gp) continue;
     if (padNative && /Vendor: 054c/i.test(gp.id)) continue;
+    usable = true;
     if (!pad.seen) { pad.seen = true; maybeGuide('gamepad'); }
     const [ax = 0, ay = 0, rx = 0, ry = 0] = gp.axes;
     const anything = gp.buttons.some((b) => b.pressed) || gp.axes.some((a) => Math.abs(a) > 0.6);
@@ -1385,6 +1392,7 @@ function pollPad(t) {
     padButton(g, 9, t, openContext, false);
     if (Math.abs(rx) > 0.15 || Math.abs(ry) > 0.15) { lean.tx = rx; lean.ty = ry; }
   }
+  return usable;
 }
 
 // A PlayStation controller through WinTV's input helper (D-45): the same as
@@ -1402,30 +1410,48 @@ function padPress(p) {
 }
 
 // ------------------------------------------------------------------ motion
-// The focused tile leans toward the pointer/stick and sways a little when
-// idle; the sheen follows the lean like light on a glossy card. Reduce
-// motion holds it still.
-function frame(t) {
-  pollPad(t);
-  const el = currentTile();
-  if (el) {
-    const m = look.still ? 0 : 1;
-    const swayX = Math.sin(t / 1500) * 0.35;
-    const swayY = Math.cos(t / 1900) * 0.3;
-    lean.x += (lean.tx + swayX - lean.x) * 0.07;
-    lean.y += (lean.ty + swayY - lean.y) * 0.07;
-    lean.tx *= 0.97;
-    lean.ty *= 0.97;
-    const s = el.style;
-    s.setProperty('--ry', `${(lean.x * 6 * m).toFixed(2)}deg`);
-    s.setProperty('--rx', `${(-lean.y * 4.5 * m).toFixed(2)}deg`);
-    s.setProperty('--px', `${(lean.x * 0.55 * m).toFixed(3)}vw`);
-    s.setProperty('--py', `${(lean.y * 0.45 * m).toFixed(3)}vh`);
-    s.setProperty('--sx', `${(50 + lean.x * 40 * m).toFixed(1)}%`);
-    s.setProperty('--sy', `${(25 + lean.y * 35 * m).toFixed(1)}%`);
-  }
+// The focused tile leans toward the pointer/stick and settles back; the
+// sheen follows the lean like light on a glossy card. Reduce motion holds it
+// still. A screen nobody touches draws nothing (D-54): it used to sway the
+// tile on every refresh, forever, which kept a PC's graphics card at a third
+// and a CPU core busy on an idle home screen. The loop runs while the tile
+// moves or a gamepad needs asking, and any input starts it again.
+function kickFrames() {
+  if (framing) return;
+  framing = true;
   requestAnimationFrame(frame);
 }
+
+function frame(t) {
+  const pads = pollPad(t);
+  const el = currentTile();
+  let moving = false;
+  if (el) {
+    const m = look.still ? 0 : 1;
+    lean.x += (lean.tx - lean.x) * 0.07;
+    lean.y += (lean.ty - lean.y) * 0.07;
+    lean.tx *= 0.97;
+    lean.ty *= 0.97;
+    moving = Math.abs(lean.x) + Math.abs(lean.y) + Math.abs(lean.tx) + Math.abs(lean.ty) > 0.002;
+    if (!moving) lean.x = lean.y = lean.tx = lean.ty = 0;
+    const v = [(lean.x * 6 * m).toFixed(2), (-lean.y * 4.5 * m).toFixed(2), (lean.x * 0.55 * m).toFixed(3),
+      (lean.y * 0.45 * m).toFixed(3), (50 + lean.x * 40 * m).toFixed(1), (25 + lean.y * 35 * m).toFixed(1)];
+    const key = v.join();
+    if (leanWritten.get(el) !== key) { // nothing written, nothing drawn
+      leanWritten.set(el, key);
+      const s = el.style;
+      s.setProperty('--ry', `${v[0]}deg`);
+      s.setProperty('--rx', `${v[1]}deg`);
+      s.setProperty('--px', `${v[2]}vw`);
+      s.setProperty('--py', `${v[3]}vh`);
+      s.setProperty('--sx', `${v[4]}%`);
+      s.setProperty('--sy', `${v[5]}%`);
+    }
+  }
+  if (moving || pads) requestAnimationFrame(frame);
+  else framing = false;
+}
+window.addEventListener('gamepadconnected', () => kickFrames());
 
 // ------------------------------------------------------------------ clock
 function clock() {
@@ -2307,7 +2333,7 @@ function updateRows(u) {
 // the PC wakes from sleep, it shows a big clock over drifting colour. Any
 // button wakes it. After a long absence, and after sleep, waking asks who is
 // watching, the way a streaming box does.
-function touched() { lastInput = Date.now(); }
+function touched() { lastInput = Date.now(); kickFrames(); }
 
 function showLock(askWho = false) {
   if (lock) { lock.askWho ||= askWho; return; }
@@ -2452,5 +2478,5 @@ function watchIdle() {
   if (profiles.length > 1) openPicker(); else paintMe();
   clock();
   watchIdle();
-  requestAnimationFrame(frame);
+  kickFrames();
 })();

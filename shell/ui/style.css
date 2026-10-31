@@ -40,7 +40,15 @@ body.pointer { cursor: default; }
     radial-gradient(70% 60% at 60% 110%, color-mix(in srgb, var(--c1, #333) 55%, #000) 0%, transparent 70%),
     linear-gradient(160deg, #0d0d12 0%, #000 100%);
   filter: saturate(1.15);
-  animation: drift 26s ease-in-out infinite alternate;
+  transform: scale(1.04); /* still: an endless drift under the glass panels redrew the screen all the time (D-54) */
+}
+/* Only the screen saver's colour drifts (it should move, for the screen's
+   sake); on the home screen an endless drift under the glass panels redrew
+   the whole screen all the time (D-54). */
+#lock:not(.hidden) .art { animation: drift 26s ease-in-out infinite alternate; }
+@keyframes drift {
+  from { transform: translate3d(-1.5%, -1%, 0) scale(1.02); }
+  to   { transform: translate3d(1.5%, 1.2%, 0) scale(1.07); }
 }
 .art.on { opacity: 1; }
 .art svg {
@@ -53,10 +61,6 @@ body.pointer { cursor: default; }
   color: #fff;
   filter: blur(.2vh);
   transform: rotate(-8deg);
-}
-@keyframes drift {
-  from { transform: translate3d(-1.5%, -1%, 0) scale(1.02); }
-  to   { transform: translate3d(1.5%, 1.2%, 0) scale(1.07); }
 }
 
 .shade {
