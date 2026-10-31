@@ -10,7 +10,7 @@ if ((Test-Path $EdgeRemovedMark) -and (Test-Path $EdgeExe)) {
 }
 # Updates bring new setup scripts but don't register tasks; a task a newer
 # release needs comes here, at the next boot (D-39).
-Invoke-Step 'admin broker task' { Register-AdminTask }
+Invoke-Step 'admin tasks' { Register-AdminTask }
 # The TV's shell must point at an installed version (D-28).
 Invoke-Step 'TV shell points at the installed version' {
     $v = (Get-Content "$env:ProgramFiles\WinTV\current.json" -Raw | ConvertFrom-Json).version

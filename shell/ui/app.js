@@ -1923,10 +1923,18 @@ async function adminRows() {
   return [
     { kind: 'action', label: 'Device name', value: d.pending ? `${d.pending} after a restart` : d.name, press: () => renameDevice(d) },
     { kind: 'info', label: 'Disk encryption', value: typeof crypt === 'function' ? crypt(e) : crypt },
-    { kind: 'choice', label: 'Windows desktop', value: 'For repairs', options: [
-      { label: 'Sign in as admin', run: async () => { const r = await api.power('switch-user'); if (!r.ok) toast(r.error); } }] },
+    { kind: 'choice', label: 'Windows desktop', value: 'For repairs', options: [{ label: 'Sign in as admin', run: signInAsAdmin }] },
     { kind: 'action', label: 'Lock', value: '', press: lockAdmin },
   ];
+}
+
+// Windows' sign-in screen, for the admin. Settings closes first, which locks
+// Admin: signing out of the desktop brings the TV back to the home screen
+// (BackToTV, D-41).
+async function signInAsAdmin() {
+  closeSettings();
+  const r = await api.power('switch-user');
+  if (!r.ok) toast(r.error);
 }
 
 function askAdminPassword() {

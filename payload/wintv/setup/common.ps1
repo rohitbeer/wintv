@@ -115,6 +115,11 @@ function Register-WinTVTask {
             $tr.DaysInterval = 1
             $tr.RandomDelay = 'PT1H'
         }
+        elseif ($t -eq 'signout') {
+            # Right after anyone signs out: Winlogon's event 7002 in the System log.
+            $tr = $def.Triggers.Create(0)
+            $tr.Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-Winlogon''] and EventID=7002]]</Select></Query></QueryList>'
+        }
     }
     $act = $def.Actions.Create(0)
     $act.Path = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -136,9 +141,13 @@ function Register-UpdateTasks {
 
 # Settings > Admin's broker (D-39): the TV account may start it, not change
 # it, and it takes no arguments. It ends by itself after 10 idle minutes.
+# BackToTV puts the TV back on the screen when the admin signs out of the
+# Windows desktop (D-41).
 function Register-AdminTask {
     Register-WinTVTask -Name 'AdminBroker' -Script 'admin.ps1' `
         -Description 'WinTV: the jobs of Settings > Admin, behind the admin password. Stops after 10 idle minutes.' -UsersMayStart
+    Register-WinTVTask -Name 'BackToTV' -Script 'back-to-tv.ps1' -Triggers signout `
+        -Description 'WinTV: after the admin signs out of the Windows desktop, the TV comes back on the screen.'
 }
 
 # The tv account's Shell value names the supervisor of the version in
