@@ -344,6 +344,18 @@ function Set-PowerTimeout([string]$Name, [int]$Minutes) {
     if ($LASTEXITCODE) { throw "powercfg /change: $($out -join ' ')" }
 }
 
+# Files (D-40): the drives, and this account's SID for its Recycle Bins.
+# Removable drives (USB sticks) have no Recycle Bin; fixed ones, USB disks
+# included, do. The system drive's bin counts, but Files doesn't show C:\.
+function Get-Drives {
+    $sys = "$env:SystemDrive\"
+    $list = foreach ($d in [IO.DriveInfo]::GetDrives()) {
+        if (-not $d.IsReady -or [string]$d.DriveType -notin 'Removable', 'Fixed') { continue }
+        @{ root = $d.Name; label = $d.VolumeLabel; removable = ([string]$d.DriveType -eq 'Removable'); system = ($d.Name -eq $sys) }
+    }
+    @{ sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; drives = @($list) }
+}
+
 function Get-About {
     $os = Get-CimInstance Win32_OperatingSystem
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -394,6 +406,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             'apps.list'   { @{ apps = @(Get-AppList) } }
             'apps.open'   { Open-App ([string]$req.app) }
             'about'       { Get-About }
+            'drives.get'  { Get-Drives }
             'process.find' {
                 # The browser's main process (no --type=) started with exactly this --user-data-dir.
                 $pattern = [regex]::Escape([string]$req.dir) + '("|\s|$)'

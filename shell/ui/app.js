@@ -16,6 +16,13 @@ const GLYPHS = {
   sound: '<path d="M4.5 9.5h3l4.5-3.8v12.6l-4.5-3.8h-3z" stroke-linejoin="round"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>',
   lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2.2"/><path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5"/>',
+  folder: '<path d="M3.5 7.2a1.7 1.7 0 0 1 1.7-1.7h4.1l2 2.2h7.5a1.7 1.7 0 0 1 1.7 1.7v8.4a1.7 1.7 0 0 1-1.7 1.7H5.2a1.7 1.7 0 0 1-1.7-1.7z" stroke-linejoin="round"/>',
+  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19.5h14"/>',
+  music: '<path d="M9 17.5V6.5l10-2v11"/><circle cx="6.8" cy="17.5" r="2.2"/><circle cx="16.8" cy="15.5" r="2.2"/>',
+  photo: '<rect x="3.5" y="5" width="17" height="14" rx="2.2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" stroke-linejoin="round"/>',
+  drive: '<rect x="3.5" y="13" width="17" height="6" rx="1.8"/><path d="M5.5 13 8 5.5h8l2.5 7.5"/><circle cx="16.5" cy="16" r=".6" fill="currentColor"/>',
+  bin: '<path d="M4.5 7h15M9.5 7V5h5v2M6.5 7l1 12.5h9l1-12.5"/><path d="M10.3 10.5v6M13.7 10.5v6"/>',
+  file: '<path d="M7 3.5h6.5l4 4v13H7z" stroke-linejoin="round"/><path d="M13.5 3.5v4h4"/>',
   update: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 4.5v3.6h-3.6"/><path d="M12 8.5v4.2l2.6 1.6"/>',
   moon: '<path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" stroke-linejoin="round"/>',
   apps: '<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
@@ -67,6 +74,7 @@ const api = window.wintv || {
     if (op === 'device.rename') return { ok: true, result: { name: 'WINTV', pending: a.name } };
     return { ok: true, result: { name: 'WINTV', pending: null } };
   },
+  files: async (op, a) => mockFiles(op, a || {}),
   onDevice: () => {},
   setProfile: async () => ({ ok: true }),
   setPref: async (key, value) => ({ ok: true, result: { ...prefs, [key]: value } }),
@@ -81,6 +89,35 @@ const api = window.wintv || {
   onPicker: () => {},
   onPrefs: () => {},
 };
+
+// Files in a plain browser: a few folders, a USB stick and a Recycle Bin.
+function mockFiles(op, a) {
+  const home = 'C:\\Users\\tv\\';
+  const item = (name, kind) => ({ name, path: `${a.path}\\${name}`, folder: kind === 'folder', size: 734003200, modified: Date.now(), kind });
+  const ok = (result) => ({ ok: true, result });
+  if (op === 'places') {
+    return ok({ bin: 2, places: [
+      { id: 'downloads', name: 'Downloads', glyph: 'download', path: `${home}Downloads` },
+      { id: 'videos', name: 'Videos', glyph: 'film', path: `${home}Videos` },
+      { id: 'music', name: 'Music', glyph: 'music', path: `${home}Music` },
+      { id: 'pictures', name: 'Pictures', glyph: 'photo', path: `${home}Pictures` },
+      { id: 'drive:E:\\', name: 'USB drive', letter: 'E:', glyph: 'drive', path: 'E:\\', removable: true }] });
+  }
+  if (op === 'list') {
+    return ok({ path: a.path, removable: a.path.startsWith('E:'), more: false, items: [item('Holidays', 'folder'),
+      ...Array.from({ length: 14 }, (_, i) => item(`Episode ${i + 1}.mp4`, 'video')), item('Cover.jpg', 'image'), item('Beach.jpg', 'image'),
+      item('Theme.mp3', 'audio'), item('notes.txt', 'other')] });
+  }
+  if (op === 'bin.list') {
+    return ok({ items: [
+      { id: 'C:\\$Recycle.Bin\\S-1\\$IAAAAAA.mp4', name: 'Old film.mp4', from: `${home}Videos`, deleted: Date.now() - 864e5, size: 1, folder: false, kind: 'video' },
+      { id: 'C:\\$Recycle.Bin\\S-1\\$IBBBBBB', name: 'Trip', from: `${home}Pictures`, deleted: Date.now() - 3 * 864e5, size: 1, folder: true, kind: 'folder' }] });
+  }
+  if (op === 'thumb') return ok(null);
+  if (op === 'media') return ok({ kind: 'image', url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="%23335"/></svg>' });
+  if (op === 'trash') return ok({ gone: a.path.startsWith('E:') });
+  return ok({});
+}
 
 // Sample answers for design work in a plain browser.
 const MOCK_SYSTEM = {
@@ -238,6 +275,8 @@ function bump(dir) {
 function move(dx, dy) {
   if (picker) { if (dx) movePicker(dx); return; }
   if (sheet) { if (dy) moveSheet(dy); return; }
+  if (viewer) { moveViewer(dx, dy); return; }
+  if (files) { moveFiles(dx, dy); return; }
   if (settings) { moveSettings(dx, dy); return; }
   if (allApps) { moveAllApps(dx, dy); return; }
   if (meFocused) { if (dy > 0) focusMe(false); return; }
@@ -277,6 +316,8 @@ async function activate() {
   if (guide) return closeGuide();
   if (picker) return choosePicker();
   if (sheet) return sheet.items[sheet.index].run();
+  if (viewer) return activateViewer();
+  if (files) return activateFiles();
   if (settings) return activateSetting();
   if (allApps) return openFromAllApps();
   if (meFocused) { select(); return openProfileMenu(); }
@@ -289,6 +330,7 @@ async function activate() {
   if (item.kind === 'power') return openPower();
   if (item.kind === 'settings') return openSettings();
   if (item.kind === 'allapps') return openAllApps();
+  if (item.kind === 'files') return openFiles();
   const res = await api.launch(item.id);
   if (!res.ok) toast(res.error || `Could not open ${item.name}`);
 }
@@ -390,6 +432,8 @@ function openPower() {
 }
 
 function openContext() {
+  if (viewer) return;
+  if (files) return filesMenu();
   if (allApps) return allAppsMenu();
   if (picker || settings) return;
   const item = current();
@@ -407,6 +451,8 @@ function back() {
   if (guide) { closeGuide(); return; }
   if (picker) { if (active) closePicker(); return; }
   if (closeSheet()) return;
+  if (viewer) { closeViewer(); return; }
+  if (files) { filesBack(); return; }
   if (allApps) { closeAllApps(); return; }
   if (meFocused) { focusMe(false); return; }
   if (settings) { settingsBack(); return; }
@@ -561,16 +607,17 @@ function focusAllApps(i, byPointer = false) {
   if (!byPointer) follow($('allapps'), allApps.tiles[i], 0.42); // as in focusSheet
 }
 
-// Arrows go to the nearest tile that way, across the groups' headings.
-function moveAllApps(dx, dy) {
-  const from = allApps.tiles[allApps.index]?.getBoundingClientRect();
-  if (!from) return;
+// Arrows go to the nearest tile that way, in grids with headings or uneven
+// rows (All apps, Files). -1 if there is none.
+function nearestTile(tiles, index, dx, dy) {
+  const from = tiles[index]?.getBoundingClientRect();
+  if (!from) return -1;
   const cx = from.left + from.width / 2;
   const cy = from.top + from.height / 2;
   let best = -1;
   let bestScore = Infinity;
-  allApps.tiles.forEach((t, i) => {
-    if (i === allApps.index) return;
+  tiles.forEach((t, i) => {
+    if (i === index) return;
     const b = t.getBoundingClientRect();
     const x = b.left + b.width / 2 - cx;
     const y = b.top + b.height / 2 - cy;
@@ -580,6 +627,11 @@ function moveAllApps(dx, dy) {
     const score = along + across * 3;
     if (score < bestScore) { bestScore = score; best = i; }
   });
+  return best;
+}
+
+function moveAllApps(dx, dy) {
+  const best = nearestTile(allApps.tiles, allApps.index, dx, dy);
   if (best >= 0) { focusAllApps(best); tick(); }
 }
 
@@ -606,6 +658,370 @@ function allAppsMenu() {
     { label: 'Cancel', run: closeSheet },
   ]);
 }
+
+// ------------------------------------------------------------------ Files (D-40)
+// The TV account's folders, its drives and its Recycle Bin, and a full-screen
+// player for what is in them. main.js checks every path sent back.
+let files = null; // while open: { places, side, col, place, stack, items, tiles, index, removable, token }
+const BIN_PLACE = { id: 'bin', name: 'Recycle Bin', glyph: 'bin' };
+const KIND_GLYPH = { folder: 'folder', video: 'film', audio: 'music', image: 'photo', other: 'file' };
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB`
+  : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`);
+const fmtDay = (ms) => new Date(ms).toLocaleDateString([], new Date(ms).getFullYear() === new Date().getFullYear()
+  ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
+const lastPart = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+const placeName = (p) => (p.letter ? `${p.name} (${p.letter})` : p.count ? `${p.name} · ${p.count}` : p.name);
+
+async function openFiles() {
+  files = { places: [], side: 0, col: 'side', place: null, stack: [], items: [], tiles: [], index: 0, removable: false, token: 0 };
+  $('files').classList.remove('hidden');
+  $('fl-items').innerHTML = '';
+  $('fl-path').textContent = '';
+  const r = await api.files('places');
+  if (!files) return;
+  if (!r.ok) { toast(r.error || 'Couldn’t open Files'); closeFiles(); return; }
+  files.places = [...r.result.places, { ...BIN_PLACE, count: r.result.bin }];
+  pickPlace(0);
+}
+
+function closeFiles() {
+  files = null;
+  thumbs.queue.length = 0;
+  thumbs.seen?.disconnect();
+  $('files').classList.add('hidden');
+  setFocus(pos.row, pos.col, true);
+}
+
+function paintPlaces() {
+  const box = $('fl-places');
+  box.innerHTML = '';
+  files.places.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.className = 'set-sec';
+    b.tabIndex = -1;
+    b.innerHTML = `${glyph(p.glyph)}<span></span>`;
+    b.querySelector('span').textContent = placeName(p);
+    b.classList.toggle('current', i === files.side);
+    b.classList.toggle('focused', files.col === 'side' && i === files.side);
+    b.addEventListener('click', () => { leaveItems(); pickPlace(i); });
+    box.append(b);
+  });
+}
+
+function pickPlace(i) {
+  if (i < 0 || i >= files.places.length) return;
+  files.side = i;
+  files.place = files.places[i];
+  files.stack = [];
+  paintPlaces();
+  loadItems(0);
+}
+
+// The folder (or the Recycle Bin) on the right; `keep` is the tile to focus.
+async function loadItems(keep) {
+  const token = ++files.token;
+  const p = files.place;
+  $('fl-path').textContent = [placeName({ ...p, count: 0 }), ...files.stack.map((s) => s.name)].join('  ›  ');
+  $('fl-note').textContent = '';
+  const r = p.id === 'bin' ? await api.files('bin.list') : await api.files('list', { path: files.stack.at(-1)?.path || p.path });
+  if (!files || token !== files.token) return; // moved on meanwhile
+  if (!r.ok) { files.items = []; paintItems(0); $('fl-note').textContent = r.error || 'Couldn’t open this folder'; return; }
+  files.removable = !!r.result.removable;
+  if (p.id === 'bin') {
+    files.items = r.result.items.map((it) => ({ ...it, bin: true }));
+    if (files.items.length) files.items.unshift({ action: 'empty', name: 'Empty Recycle Bin', kind: 'empty' });
+    p.count = r.result.items.length;
+    paintPlaces();
+  } else files.items = r.result.items;
+  paintItems(Math.max(0, Math.min(keep, files.items.length - 1)));
+  if (!files.items.length) $('fl-note').textContent = p.id === 'bin' ? 'The Recycle Bin is empty.' : 'Nothing in here yet.';
+  else if (r.result.more) $('fl-note').textContent = 'Only the first 3,000 are shown.';
+}
+
+function itemLine(it) {
+  if (it.action) return `${files.items.length - 1} in the bin`;
+  if (it.bin) return `From ${lastPart(it.from)} · ${fmtDay(it.deleted)}`;
+  return it.folder ? 'Folder' : fmtSize(it.size);
+}
+
+function paintItems(index) {
+  const box = $('fl-items');
+  box.innerHTML = '';
+  box.scrollTop = 0;
+  thumbs.queue.length = 0;
+  thumbs.seen?.disconnect();
+  // Windows' thumbnails, as tiles come near the screen, a few at a time.
+  thumbs.seen = new IntersectionObserver((seen) => {
+    for (const e of seen) if (e.isIntersecting) { thumbs.seen.unobserve(e.target); thumbs.queue.push(e.target); }
+    pumpThumbs();
+  }, { root: box, rootMargin: '50% 0px' });
+  const grid = document.createElement('div');
+  grid.className = 'fl-grid';
+  files.tiles = files.items.map((it, i) => {
+    const t = document.createElement('button');
+    t.className = `fl-tile ${it.kind}`;
+    t.tabIndex = -1;
+    t.innerHTML = `<div class="fl-pic">${glyph(it.action ? 'bin' : KIND_GLYPH[it.kind] || 'file')}</div><span class="fl-name"></span><span class="fl-sub"></span>`;
+    t.querySelector('.fl-name').textContent = it.name;
+    t.querySelector('.fl-sub').textContent = itemLine(it);
+    if (!it.bin && (it.kind === 'image' || it.kind === 'video')) t.dataset.thumb = it.path;
+    t.addEventListener('mousemove', () => { toItems(); focusFileItem(i, true); });
+    t.addEventListener('click', () => { toItems(); focusFileItem(i, true); activateFiles(); });
+    t.addEventListener('contextmenu', (e) => { e.preventDefault(); toItems(); focusFileItem(i, true); filesMenu(); });
+    grid.append(t);
+    return t;
+  });
+  if (files.tiles.length) box.append(grid); // empty, the note sits right under the heading
+  for (const t of files.tiles) if (t.dataset.thumb) thumbs.seen.observe(t);
+  files.index = index;
+  if (files.col === 'items') {
+    if (files.tiles.length) focusFileItem(index);
+    else leaveItems();
+  }
+}
+
+const thumbs = { queue: [], busy: 0, seen: null };
+function pumpThumbs() {
+  while (thumbs.busy < 3 && thumbs.queue.length) {
+    const t = thumbs.queue.shift();
+    if (!t.isConnected) continue;
+    thumbs.busy += 1;
+    api.files('thumb', { path: t.dataset.thumb }).then((r) => {
+      if (!r.ok || !r.result || !t.isConnected) return;
+      const pic = t.querySelector('.fl-pic');
+      pic.style.backgroundImage = `url("${r.result}")`;
+      pic.classList.add('shot');
+    }).finally(() => { thumbs.busy -= 1; pumpThumbs(); });
+  }
+}
+
+function focusFileItem(i, byPointer = false) {
+  if (!files.tiles[i]) return;
+  files.tiles[files.index]?.classList.remove('focused');
+  files.index = i;
+  files.tiles[i].classList.add('focused');
+  if (!byPointer) follow($('fl-items'), files.tiles[i], 0.42); // as in focusSheet
+}
+
+function toItems() {
+  if (files.col === 'items' || !files.tiles.length) return;
+  files.col = 'items';
+  paintPlaces();
+  focusFileItem(Math.min(files.index, files.tiles.length - 1));
+}
+
+function leaveItems() {
+  files.tiles[files.index]?.classList.remove('focused');
+  files.col = 'side';
+  paintPlaces();
+}
+
+function moveFiles(dx, dy) {
+  if (files.col === 'side') {
+    if (dy) { const i = files.side + dy; if (i >= 0 && i < files.places.length) { pickPlace(i); tick(); } }
+    else if (dx > 0 && files.tiles.length) { toItems(); tick(); }
+    return;
+  }
+  const best = nearestTile(files.tiles, files.index, dx, dy);
+  if (best >= 0) { focusFileItem(best); tick(); } else if (dx < 0) { leaveItems(); tick(); }
+}
+
+function activateFiles() {
+  if (files.col === 'side') { toItems(); return; }
+  const it = files.items[files.index];
+  if (!it) return;
+  select();
+  if (it.action === 'empty') return confirmEmptyBin();
+  if (it.bin) return filesMenu();
+  if (it.folder) { files.stack.push({ name: it.name, path: it.path, from: files.index }); loadItems(0); return; }
+  if (it.kind === 'other') { toast('This kind of file doesn’t open on the TV'); return; }
+  openViewer(it);
+}
+
+function filesBack() {
+  if (files.col === 'items' && files.stack.length) { loadItems(files.stack.pop().from); return; }
+  if (files.col === 'items') { leaveItems(); return; }
+  closeFiles();
+}
+
+// A choice that can't be undone: Cancel has the focus.
+function confirmSheet(title, label, run) {
+  openSheet(title, [{ label, run: () => { closeSheet(); run(); } }, { label: 'Cancel', run: closeSheet }], 1);
+}
+
+function filesMenu() {
+  const it = files?.col === 'items' && files.items[files.index];
+  if (!it || it.action) return;
+  if (it.bin) {
+    openSheet(it.name, [
+      { label: 'Restore', run: async () => {
+        closeSheet();
+        const r = await api.files('bin.restore', { id: it.id });
+        toast(r.ok ? `${it.name} is back in ${lastPart(it.from)}` : r.error);
+        if (files) loadItems(files.index);
+      } },
+      { label: 'Delete for good', run: () => {
+        closeSheet();
+        confirmSheet(`Delete “${it.name}” for good?`, 'Delete for good', async () => {
+          const r = await api.files('bin.delete', { id: it.id });
+          if (!r.ok) toast(r.error);
+          if (files) loadItems(files.index);
+        });
+      } },
+      { label: 'Cancel', run: closeSheet },
+    ]);
+    return;
+  }
+  openSheet(it.name, [
+    ...(it.folder || it.kind !== 'other' ? [{ label: 'Open', run: () => { closeSheet(); activateFiles(); } }] : []),
+    files.removable
+      ? { label: 'Delete for good', run: () => { closeSheet(); confirmSheet(`Delete “${it.name}” for good? A USB stick has no Recycle Bin.`, 'Delete for good', () => trashFile(it)); } }
+      : { label: 'Move to Recycle Bin', run: () => { closeSheet(); trashFile(it); } },
+    { label: 'Cancel', run: closeSheet },
+  ]);
+}
+
+async function trashFile(it) {
+  const r = await api.files('trash', { path: it.path });
+  if (!r.ok) { toast(r.error || 'Couldn’t delete it'); return; }
+  toast(r.result.gone ? `${it.name} is deleted` : `${it.name} is in the Recycle Bin`);
+  if (!files) return;
+  const bin = files.places.find((p) => p.id === 'bin');
+  if (bin && !r.result.gone) bin.count = (bin.count || 0) + 1;
+  paintPlaces();
+  loadItems(files.index);
+}
+
+function confirmEmptyBin() {
+  const n = files.items.length - 1;
+  confirmSheet(`Delete ${n === 1 ? 'it' : `all ${n}`} for good?`, 'Empty Recycle Bin', async () => {
+    const r = await api.files('bin.empty');
+    toast(r.ok ? 'The Recycle Bin is empty' : r.error);
+    if (files) loadItems(0);
+  });
+}
+
+// ------------------------------------------------------------------ the player
+// Photos (left/right: the next one in the folder), videos and music (OK
+// pauses, left/right jump 10 s; music goes on to the next song).
+let viewer = null; // { list, at, kind, barTimer, token }
+const MEDIA_KEYS = {
+  MediaPlayPause: () => activateViewer(), MediaPlay: () => activateViewer(), MediaPause: () => activateViewer(),
+  MediaTrackNext: () => viewerTrack(1), MediaTrackPrevious: () => viewerTrack(-1), MediaStop: () => closeViewer(),
+};
+const fmtTime = (secs) => {
+  const s = Math.max(0, Math.floor(secs || 0));
+  const h = Math.floor(s / 3600);
+  const mm = Math.floor(s / 60) % 60;
+  const ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`;
+};
+
+function initViewer() {
+  const v = $('vw-video');
+  $('vw-art').innerHTML = glyph('music');
+  v.addEventListener('timeupdate', paintBar);
+  v.addEventListener('loadedmetadata', paintBar);
+  v.addEventListener('play', () => showBar());
+  v.addEventListener('pause', () => showBar());
+  v.addEventListener('ended', () => {
+    if (viewer?.kind === 'audio' && viewer.at < viewer.list.length - 1) { viewer.at += 1; showMedia(); } else showBar();
+  });
+  v.addEventListener('error', () => { if (viewer && v.getAttribute('src')) { toast('This file doesn’t play on the TV'); closeViewer(); } });
+  $('vw-img').addEventListener('error', () => { if (viewer && $('vw-img').getAttribute('src')) { toast('This picture doesn’t open on the TV'); closeViewer(); } });
+}
+
+function openViewer(it) {
+  const same = files.items.filter((x) => !x.folder && !x.bin && x.kind === it.kind);
+  viewer = { list: it.kind === 'video' ? [it] : same, at: 0, kind: it.kind, barTimer: 0, token: 0 };
+  viewer.at = Math.max(0, viewer.list.indexOf(it));
+  $('viewer').dataset.kind = it.kind;
+  $('viewer').classList.remove('hidden');
+  showMedia();
+}
+
+async function showMedia() {
+  const it = viewer.list[viewer.at];
+  const token = ++viewer.token;
+  const r = await api.files('media', { path: it.path });
+  if (!viewer || token !== viewer.token) return;
+  if (!r.ok) { toast(r.error || 'Couldn’t open it'); closeViewer(); return; }
+  const v = $('vw-video');
+  const img = $('vw-img');
+  $('vw-title').textContent = it.name;
+  if (viewer.kind === 'image') {
+    img.src = r.result.url;
+  } else {
+    $('vw-song').textContent = it.name.replace(/\.[^.]+$/, '');
+    $('vw-from').textContent = files ? (files.stack.at(-1)?.name || files.place?.name || '') : '';
+    v.src = r.result.url;
+    v.play().catch(() => {});
+  }
+  showBar();
+}
+
+function paintBar() {
+  if (!viewer) return;
+  if (viewer.kind === 'image') { $('vw-time').textContent = `${viewer.at + 1} of ${viewer.list.length}`; return; }
+  const v = $('vw-video');
+  const d = Number.isFinite(v.duration) ? v.duration : 0;
+  $('vw-progress').firstElementChild.style.width = d ? `${(v.currentTime / d) * 100}%` : '0%';
+  $('vw-time').textContent = d ? `${fmtTime(v.currentTime)} / ${fmtTime(d)}` : fmtTime(v.currentTime);
+}
+
+// Shows on any button; while a video plays or a photo is up it fades after
+// 3 s. Paused, and for music, it stays.
+function showBar() {
+  if (!viewer) return;
+  const bar = $('vw-bar');
+  bar.classList.remove('quiet');
+  paintBar();
+  clearTimeout(viewer.barTimer);
+  const v = $('vw-video');
+  if (viewer.kind === 'image' || (viewer.kind === 'video' && !v.paused)) viewer.barTimer = setTimeout(() => bar.classList.add('quiet'), 3000);
+}
+
+function moveViewer(dx, dy) {
+  if (dy || !dx) { showBar(); return; }
+  if (viewer.kind === 'image') {
+    const i = viewer.at + dx;
+    if (i < 0 || i >= viewer.list.length) { showBar(); return; }
+    viewer.at = i;
+    tick();
+    showMedia();
+    return;
+  }
+  const v = $('vw-video');
+  if (Number.isFinite(v.duration)) v.currentTime = Math.max(0, Math.min(v.duration - 0.25, v.currentTime + dx * 10));
+  showBar();
+}
+
+function activateViewer() {
+  if (!viewer) return;
+  if (viewer.kind === 'image') { showBar(); return; }
+  const v = $('vw-video');
+  if (v.paused) v.play().catch(() => {}); else v.pause();
+}
+
+function viewerTrack(d) {
+  const i = viewer.at + d;
+  if (viewer.kind === 'video' || i < 0 || i >= viewer.list.length) return;
+  viewer.at = i;
+  showMedia();
+}
+
+function closeViewer() {
+  if (!viewer) return;
+  clearTimeout(viewer.barTimer);
+  viewer = null;
+  const v = $('vw-video');
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+  $('vw-img').removeAttribute('src');
+  $('viewer').classList.add('hidden');
+}
+
 
 function pin(a) {
   const who = active || profiles[0]?.id;
@@ -771,6 +1187,8 @@ window.addEventListener('keydown', (e) => {
     else if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); move(0, k === 'ArrowDown' ? 1 : -1); }
     return;
   }
+  // The remote's media keys, while the player is up.
+  if (viewer && MEDIA_KEYS[k]) { e.preventDefault(); MEDIA_KEYS[k](); return; }
   const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   if (dirs[k]) { e.preventDefault(); move(...dirs[k]); return; }
   if (k === 'Enter' || k === ' ') {
@@ -1708,6 +2126,7 @@ function wake() {
 function watchIdle() {
   setInterval(() => {
     if (lock || !(prefs.screenSaverMinutes > 0)) return;
+    if (viewer) { touched(); return; } // watching something from Files
     // An app in front means someone is watching, not idling on the home screen.
     if (!document.hasFocus()) { touched(); return; }
     if (Date.now() - lastInput > prefs.screenSaverMinutes * 60000) showLock(false);
@@ -1727,6 +2146,7 @@ function watchIdle() {
   appVersion = state.version || '';
   build(state);
   setFocus(0, 0, true);
+  initViewer();
   api.onState((s) => {
     if (s.art) useArt(s.art);
     if (s.profiles) { profiles = s.profiles; paintMe(); if (meFocused) focusMe(true); }
@@ -1748,6 +2168,8 @@ function watchIdle() {
     closeSheet();
     if (settings) closeSettings();
     if (allApps) closeAllApps();
+    closeViewer();
+    if (files) closeFiles();
     if (guide) closeGuide();
     setFocus(pos.row, pos.col, true);
   });

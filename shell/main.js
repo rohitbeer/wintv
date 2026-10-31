@@ -8,7 +8,7 @@
 // It must never quit on its own, must survive its own crashes, and is the
 // only way to start anything.
 
-const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, shell, session, powerMonitor, protocol, screen, systemPreferences, nativeImage } = require('electron');
 
 // First thing: an error while starting must end this process (the
 // supervisor then restarts it or rolls back), not leave Electron's
@@ -23,6 +23,7 @@ const net = require('node:net');
 const path = require('node:path');
 const os = require('node:os');
 const art = require('./art');
+const filesLib = require('./files');
 
 const IS_WIN = process.platform === 'win32';
 // Admin-owned config (C:\ProgramData\WinTV, read-only for the tv user).
@@ -345,6 +346,7 @@ const SYSTEM_OPS = {
     return { app: a.app };
   },
   about: () => ({}),
+  'drives.get': () => ({}),
   'process.find': (a) => {
     const root = expand('${PROFILES}') + path.sep;
     if (typeof a.dir !== 'string' || !a.dir.startsWith(root) || /["\r\n]/.test(a.dir)) throw new Error('bad argument');
@@ -958,6 +960,97 @@ function layerIpc() {
   }));
 }
 
+// ---------------------------------------------------------------- files (D-40)
+// Files: the TV account's folders, its drives and its Recycle Bin. files.js
+// checks every path the screen sends back against these places; media plays
+// from wintv://ui/media/<token>, a token per file checked here.
+const MEDIA = new Map(); // token -> file
+let drives = { at: 0, list: [], sid: null };
+
+async function refreshDrives() {
+  if (!IS_WIN || Date.now() - drives.at < 5000) return;
+  const r = await system('drives.get', {});
+  if (r.ok) drives = { at: Date.now(), list: r.result.drives || [], sid: r.result.sid || null };
+}
+
+function folderPlaces() {
+  return [
+    { id: 'downloads', name: 'Downloads', glyph: 'download', path: app.getPath('downloads') },
+    { id: 'videos', name: 'Videos', glyph: 'film', path: app.getPath('videos') },
+    { id: 'music', name: 'Music', glyph: 'music', path: app.getPath('music') },
+    { id: 'pictures', name: 'Pictures', glyph: 'photo', path: app.getPath('pictures') },
+  ];
+}
+
+function drivePlaces() {
+  return drives.list.filter((d) => !d.system && typeof d.root === 'string').map((d) => ({
+    id: `drive:${d.root}`, name: d.label || (d.removable ? 'USB drive' : 'Drive'), letter: d.root.slice(0, 2),
+    glyph: 'drive', path: d.root, removable: !!d.removable,
+  }));
+}
+
+const fileRoots = () => [...folderPlaces(), ...drivePlaces()].map((p) => p.path);
+const binDirs = () => (drives.sid ? drives.list.filter((d) => !d.removable).map((d) => path.join(d.root, '$Recycle.Bin', drives.sid)) : []);
+const onRemovable = (p) => drivePlaces().some((d) => d.removable && filesLib.inside(d.path, p));
+
+function checked(p) {
+  const f = filesLib.check(fileRoots(), p);
+  if (!f) throw new Error('That isn’t there any more');
+  return f;
+}
+
+const FILE_OPS = {
+  places: async () => {
+    await refreshDrives();
+    return { places: [...folderPlaces(), ...drivePlaces()], bin: filesLib.binList(binDirs()).length };
+  },
+  list: async (a) => {
+    await refreshDrives();
+    const dir = checked(a.path);
+    return { path: dir, removable: onRemovable(dir), ...filesLib.list(dir) };
+  },
+  // Windows' own thumbnail (its cache), as a data URL; null if it has none.
+  thumb: async (a) => {
+    const f = checked(a.path);
+    if (!IS_WIN) return null;
+    try { return (await nativeImage.createThumbnailFromPath(f, { width: 480, height: 270 })).toDataURL(); } catch { return null; }
+  },
+  media: async (a) => {
+    const f = checked(a.path);
+    const type = filesLib.mediaType(f);
+    if (!type) throw new Error('This kind of file doesn’t open on the TV');
+    const token = crypto.randomBytes(16).toString('hex');
+    MEDIA.set(token, f);
+    if (MEDIA.size > 64) MEDIA.delete(MEDIA.keys().next().value);
+    return { url: `wintv://ui/media/${token}`, kind: type.split('/')[0] };
+  },
+  // To the Recycle Bin; a USB stick has none, so there it is gone for good
+  // (the screen asks first).
+  trash: async (a) => {
+    await refreshDrives();
+    const f = checked(a.path);
+    if (fileRoots().some((r) => path.relative(r, f) === '')) throw new Error('bad argument'); // not a place itself
+    if (onRemovable(f)) { fs.rmSync(f, { recursive: true, maxRetries: 2 }); return { gone: true }; }
+    await shell.trashItem(f);
+    return { gone: false };
+  },
+  'bin.list': async () => { await refreshDrives(); return { items: filesLib.binList(binDirs()) }; },
+  'bin.restore': async (a) => { await refreshDrives(); return { path: filesLib.binRestore(binDirs(), a.id) }; },
+  'bin.delete': async (a) => { await refreshDrives(); filesLib.binDelete(binDirs(), a.id); return {}; },
+  'bin.empty': async () => { await refreshDrives(); return { count: filesLib.binEmpty(binDirs()) }; },
+};
+
+const FILE_ERRORS = { EPERM: 'Windows didn’t allow that', EACCES: 'Windows didn’t allow that', EBUSY: 'It’s in use', ENOENT: 'That isn’t there any more', ENOTEMPTY: 'It’s in use' };
+
+async function filesOp(op, args) {
+  const fn = FILE_OPS[op];
+  if (!fn) return { ok: false, error: 'Unknown' };
+  try { return { ok: true, result: await fn(args) }; } catch (e) {
+    log('files:', op, e.code || '', e.message);
+    return { ok: false, error: FILE_ERRORS[e.code] || e.message };
+  }
+}
+
 // ---------------------------------------------------------------- admin (D-39)
 // Settings > Admin: jobs on the PC itself, behind the admin password, done
 // by a SYSTEM broker (payload setup/admin.ps1) this account may only start.
@@ -1143,10 +1236,9 @@ const UI_TYPES = {
 protocol.registerSchemesAsPrivileged([{ scheme: 'wintv', privileges: { standard: true, secure: true, stream: true } }]);
 
 // A downloaded file, in the pieces a video player asks for (HTTP Range).
-function serveCached(req, file) {
+function serveCached(req, file, type = UI_TYPES[path.extname(file)] || 'application/octet-stream') {
   let size;
   try { size = fs.statSync(file).size; } catch { return new Response('', { status: 404 }); }
-  const type = UI_TYPES[path.extname(file)] || 'application/octet-stream';
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
   if (!range || (!range[1] && !range[2])) {
     return new Response(Readable.toWeb(fs.createReadStream(file)), { headers: { 'content-type': type, 'content-length': String(size), 'accept-ranges': 'bytes' } });
@@ -1167,6 +1259,12 @@ function serveUi() {
     // Files art.js downloaded: only names it writes itself.
     const cached = /^\/cache\/(videos|logos|icons)\/([0-9a-f]{16}\.(?:webm|png))$/.exec(url.pathname);
     if (cached) return serveCached(req, path.join(CACHE_DIR, cached[1], cached[2]));
+    // Files' player (D-40): only files main.js checked and gave a token.
+    const media = /^\/media\/([0-9a-f]{32})$/.exec(url.pathname);
+    if (media) {
+      const f = MEDIA.get(media[1]);
+      return f ? serveCached(req, f, filesLib.mediaType(f) || 'application/octet-stream') : new Response('', { status: 404 });
+    }
     const file = path.normalize(path.join(UI_DIR, decodeURIComponent(url.pathname)));
     if (!file.startsWith(UI_DIR + path.sep)) return new Response('', { status: 404 });
     try {
@@ -1360,6 +1458,7 @@ if (SUPERVISE) {
     ipcMain.handle('wintv:profile', fromHome((id) => setProfile(String(id))));
     ipcMain.handle('wintv:system', fromHome((op, args) => system(String(op), args && typeof args === 'object' ? args : {})));
     ipcMain.handle('wintv:admin', fromHome((op, args) => admin(String(op), args && typeof args === 'object' ? args : {})));
+    ipcMain.handle('wintv:files', fromHome((op, args) => filesOp(String(op), args && typeof args === 'object' ? args : {})));
     ipcMain.handle('wintv:updates', fromHome((action, arg) => updates(String(action), arg)));
     ipcMain.handle('wintv:pref', fromHome((key, value) => setPref(String(key), value)));
     ipcMain.handle('wintv:weather', fromHome(() => weatherNow()));

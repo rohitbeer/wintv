@@ -91,6 +91,7 @@ release `vX.Y.Z`).
 | volume up / down / mute | volume, shown over any app |
 | a text field gets the focus | the on-screen keyboard comes up (arrows + OK to type, Back to hide) |
 | Power tile | sleep, restart, shut down, switch profile |
+| Files tile | downloads, videos, music, photos, USB drives and the Recycle Bin; plays them full screen (hold OK: delete, restore) |
 | any button on the clock screen | wake the TV (after a long break it asks "Who's watching?") |
 | Settings > Admin, then the admin password | the device name, disk encryption, and Windows desktop (Windows' sign-in for the admin, then the desktop) |
 

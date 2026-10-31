@@ -154,6 +154,18 @@
       ]
     },
     {
+      "id": "files",
+      "name": "Files",
+      "kind": "files",
+      "glyph": "folder",
+      "eyebrow": "System",
+      "tagline": "Your downloads, videos, music and photos, USB drives, and the Recycle Bin.",
+      "colors": [
+        "#1f5fbf",
+        "#0b1a33"
+      ]
+    },
+    {
       "id": "settings",
       "name": "Settings",
       "kind": "settings",
